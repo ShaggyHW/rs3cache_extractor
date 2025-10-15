@@ -1,0 +1,116 @@
+["struct",
+	["version",["match","buildnr",{">=887":"ubyte",">=0":0}]],
+	["v0",["opt",["version",0],["struct",
+		["unk0","ubyte"],//always 0-4
+		["texsize","ushort"],//256,512,0, but doesn't always correspond to actualtex
+
+		//always 0000 after 2015
+		["opt0","ubyte"],
+		["opt0data",["opt",["opt0",16],["tuple","ubyte","ushort"]]],
+		["arr",["nullarray","ubyte",["struct",
+			["op",["ref","$opcode"]],
+			["value","ushort"]
+		]]],
+
+		["textureflags","ubyte"],//always 1,3,9,16
+		["diffuse",["opt",["textureflags",17,"bitor"],["match","buildnr",{">=887":"uint",">=0":0}]]],
+		["normal",["opt",["textureflags",10,"bitor"],["match","buildnr",{">=887":"uint",">=0":0}]]],
+
+		["texrepeatflags",["match","buildnr",{">=876":"ubyte",">=0":0}]],
+		["unk3_skybox",["match","buildnr",{">=876":["buffer",3,"hex"],">=0":"null"}]],//looks like a bitflag thing, bit weird
+
+		["flags2","ubyte"],//always 12,13,14,28
+		["unkfloats",["opt",["flags2",4,"bitflag"],["tuple","float","float"]]],//always 1; 1,4,32
+
+		["unk7","ubyte"],//0,1,62,63,64,255
+		["weirdshit",["opt",["unk7",255],["buffer",19,"hex"]]],//only one single material that has this
+
+		["diffuse_related1",["match","buildnr",{">=887":["opt",["textureflags",4,"bitflag"],"ubyte"],">=0":"ubyte"}]],//always 1 or null
+		["normal_related",["opt",["textureflags",1,"bitflag"],["buffer",4,"hex"]]],//0x80000000 most of the time
+		["diffuse_related2",["match","buildnr",{">=887":["opt",["textureflags",0,"bitflag"],"ubyte"],">=0":"ubyte"}]],//always 1,0 or null
+		["diffuse_ralated2_data",["opt",["diffuse_related2",2],"ubyte"]],//last used 2015
+
+		["alphamode","ubyte"],//0,1 or 2
+		["alphacutoff",["opt",["alphamode",1],"ubyte"]],//128 most of the time
+
+		["animtex","ubyte"],//0123
+		["animtexU",["opt",["animtex",0,"bitflag"],["match","buildnr",{">=897":"short",">=0":"byte"}]]],
+		["animtexV",["opt",["animtex",1,"bitflag"],["match","buildnr",{">=897":"short",">=0":"byte"}]]],
+
+		["flagextra","bool"],
+		["extra",["opt",["flagextra",1],["struct",
+			["unk00_flags","ubyte"],//flags 1=alpha channel reuse,2=water/lava/bloom?,4=water/dg water,8=water, all skyboxes have 6
+			["unk01_flagsornumber","ubyte"],//0123 OR a high number (only 20 uses)
+			["unk02","ubyte"],//0 if unk01=0123 or number (only 4 uses)
+			["unknown",["buffer",4,"hex"]],//mostly 0 except for some ~15 water materials
+			["unk07_bool","bool"],
+			["unk08_flags","ubyte"],//0=5k,1=1,2=5k
+			["unk09_bool","bool"],//true=7
+			["unk0a_bool","bool"],
+			["specular","ubyte"],
+			["baseColorFraction","ubyte"],//indicates the mix ratio with colorint and vertex colors
+			["baseColor","ushort"]
+		]]]
+	]]],
+	["v1",["opt",["version",1],["struct",
+		["flags","uint"],
+		//0,1 unused
+		["opaque_2",["ref","flags",[2,1]]],//3061/3250
+		["flag3",["ref","flags",[3,1]]],//3095 most mats without are never used in a model
+		//4unused
+		["hasDiffuse",["ref","flags",[5,1]]],//3250, always true
+		["hasNormal",["ref","flags",[6,1]]],//2878
+		["hasCompound",["ref","flags",[7,1]]],//2223
+
+		["hasUVanimU",["ref","flags",[8,1]]],//44 uv anim u?
+		["hasUVanimV",["ref","flags",[9,1]]],//49 uv anim v?
+		["flag10",["ref","flags",[10,1]]],//282 possibly bloom
+		["flag11",["ref","flags",[11,1]]],//41 metalic?
+
+		["flag12",["ref","flags",[12,1]]],//1 use
+		["flag13",["ref","flags",[13,1]]],//73 glasslike diffraction/lensing? https://runescape.wiki/w/Altar_of_War
+		["flag14",["ref","flags",[14,1]]],//3179
+		["flag15",["ref","flags",[15,1]]],//2 use, skybox and https://runescape.wiki/w/Oathbreaker_Outfit
+
+		["flag16",["ref","flags",[16,1]]],//3069
+		["ignore_vertexcol_17",["ref","flags",[17,1]]],//338
+		["flag18",["ref","flags",[18,1]]],//24 uses different skybox? ghostlike stuff https://runescape.wiki/w/Closure%27s_robes
+		["flag19",["ref","flags",[19,1]]],//5 use gives aurora effect https://runescape.wiki/w/Bohr
+
+		["flag20",["ref","flags",[20,1]]],//40 seems to be used on flants/leafs
+		["flag21",["ref","flags",[21,1]]],//3250 all materials
+		//22+ unused
+		
+		["diffuse",["opt",["hasDiffuse",1],["struct",
+			["size","ubyte"],//actual size (some times) equal to 2^(6+size)
+			["texture","uint"]
+		]]],
+		["normal",["opt",["hasNormal",1],["struct",
+			["size","ubyte"],//actual size (some times) equal to 2^(6+size)
+			["texture","uint"]
+		]]],
+		["compound",["opt",["hasCompound",1],["struct",
+			["size","ubyte"],//actual size (some times) equal to 2^(6+size)
+			["texture","uint"]
+		]]],
+		["flag13value",["opt",["flag13",1],"float"]],
+		["flag14value",["opt",["flag14",1],["tuple","ushort","ushort"]]],//0,8520 or 13083 only, referencing other material?
+		["flag15value",["opt",["flag15",1],"float"]],
+		["flag18value",["opt",["flag18",1],"float"]],//not sure about location
+		["flag16value",["opt",["flag16",1],"float"]],
+		["flag12value",["opt",["flag12",1],"float"]],//not sure about location
+		["flag11value",["opt",["flag11",1],["tuple","float","float","float"]]],
+		["flag19value",["opt",["flag19",1],["tuple","float","float","float","float","float"]]],//location unknown
+		["normalScale",["opt",["hasNormal",1],"float"]],
+		["flag17value",["opt",["ignore_vertexcol_17",1],"float"]],
+		["uvanim_u",["opt",["hasUVanimU",1],"short"]],
+		["uvanim_v",["opt",["hasUVanimV",1],"short"]],
+
+		["always_0x0901",["buffer",2,"hex"]],//only a couple with 0001
+		["unknownbyte0","ubyte"],//always 0
+		["alphamode","ubyte"],//0,1,2
+		["alphacutoff",["opt",["alphamode",1],"ubyte"]],//127 most of the time
+		["unkFFFF",["buffer",2,"hex"]],
+		["endbyte","ubyte"]//usually equal to max texture size always 0-4
+	]]]
+]

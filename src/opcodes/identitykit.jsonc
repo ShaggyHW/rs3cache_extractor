@@ -1,0 +1,10 @@
+{
+	//male   0head,1jaw/beard,2body,3arms,4hands,5legs,6feet,
+	//female 7head,9body,10arms,11hands,12legs,13feet,
+	//also a couple of values in 70-74 range for some reason, bugged?
+	"0x01": { "name":  "bodypart", "read": "ubyte" },
+	"0x02": { "name":    "models", "read": ["array","ubyte","varuint"]},
+	"0x03": { "name":    "iscopy", "read": "true" },
+	"0x28": { "name":   "recolor", "read": ["array","ubyte",["tuple","ushort","ushort"]] },
+	"0x3c": { "name": "headmodel", "read": "varuint" }
+}

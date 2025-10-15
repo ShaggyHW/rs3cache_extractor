@@ -1,0 +1,18 @@
+["struct",
+	["byte0",["match","buildnr",{">458":"ubyte","other":0}]],
+	["switchsize",["match","buildnr",{">=495":["footer",2,"ushort"],"other":0}]],
+	["switches",["footer",["ref","switchsize"],
+		["array",["match","buildnr",{">=495":"ubyte","other":0}],["array","ushort",["struct",
+			["value","int"],
+			["jump","uint"]
+		]]]
+	]],
+	["longargcount",["match","buildnr",{">641":["footer",2,"ushort"],"other":0}]],
+	["stringargcount",["footer",2,"ushort"]],
+	["intargcount",["footer",2,"ushort"]],
+	["locallongcount",["match","buildnr",{">641":["footer",2,"ushort"],"other":0}]],
+	["localstringcount",["footer",2,"ushort"]],
+	["localintcount",["footer",2,"ushort"]],
+	["instructioncount",["footer",4,"uint"]],
+	["opcodedata",["buffer",["bytesleft"],"buffer"]]
+]

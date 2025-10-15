@@ -1,0 +1,165 @@
+{
+	"properties": {
+		"tileimgsize": {
+			"type": "number"
+		},
+		"mapsizex": {
+			"type": "number"
+		},
+		"mapsizez": {
+			"type": "number"
+		},
+		"noyflip": {
+			"type": "boolean",
+			"default": false,
+			"description": "Set to true to keep the output y origin at the bottom left, equal to the game z origin."
+		},
+		"nochunkoffset": {
+			"type": "boolean",
+			"default": false,
+			"description": "Set to true to keep output chunks aligned with in-game chunks. Incurs performance penalty as more neighbouring chunks have to be loaded."
+		},
+		"area": {
+			"default": "full",
+			"description": "A string representing the the map area to render. Either one of the named presets (main, full, test ...), or one or more chunk ranges. eg: 50.50,20.20-70.70",
+			"anyOf": [
+				{
+					"type": "string",
+					"pattern": "^\\d+\\.\\d+(-\\d+\\.\\d+)?(,\\d+\\.\\d+(-\\d+\\.\\d+)?)*$"
+				},
+				{
+					"type": "string",
+					"enum": [
+						"main",
+						"full",
+						"test"
+					]
+				},
+				{
+					"type": "string",
+					"pattern": "^\\w+$"
+				}
+			]
+		},
+		"layers": {
+			"items": {
+				"properties": {
+					"mode": {
+						"type": "string"
+					},
+					"pxpersquare": {
+						"type": "number"
+					},
+					"name": {
+						"type": "string"
+					},
+					"level": {
+						"type": "number"
+					},
+					"usegzip": {
+						"type": "boolean"
+					},
+					"subtractlayers": {
+						"items": {
+							"type": "string"
+						}
+					},
+					"format": {
+						"type": "string",
+						"enum": [
+							"png",
+							"webp"
+						]
+					},
+					"mipmode": {
+						"enum": [
+							"default",
+							"avg"
+						]
+					}
+				},
+				"required": [
+					"mode",
+					"name",
+					"pxpersquare",
+					"level"
+				],
+				"oneOf": [
+					{
+						"properties": {
+							"mode": {
+								"enum": [
+									"3d",
+									"minimap",
+									"interactions"
+								]
+							},
+							"dxdy": {
+								"type": "number"
+							},
+							"dzdy": {
+								"type": "number"
+							},
+							"hidelocs": {
+								"type": "boolean"
+							},
+							"overlaywalls": {
+								"type": "boolean"
+							},
+							"overlayicons": {
+								"type": "boolean"
+							}
+						},
+						"required": [
+							"mode",
+							"dxdy",
+							"dzdy"
+						]
+					},
+					{
+						"properties": {
+							"mode": {
+								"const": "map"
+							},
+							"wallsonly": {
+								"type": "boolean"
+							},
+							"mapicons": {
+								"type": "boolean"
+							},
+							"thicklines": {
+								"type": "boolean"
+							}
+						},
+						"required": [
+							"mode"
+						]
+					},
+					{
+						"properties": {
+							"mode": {
+								"enum": [
+									"height",
+									"collision",
+									"locs",
+									"maplabels",
+									"rendermeta"
+								]
+							}
+						},
+						"required": [
+							"mode"
+						]
+					}
+				]
+			}
+		}
+	},
+	"required": [
+		"layers",
+		"tileimgsize",
+		"mapsizex",
+		"mapsizez",
+		"area"
+	]
+}

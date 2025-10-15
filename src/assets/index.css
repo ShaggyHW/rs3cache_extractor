@@ -1,0 +1,334 @@
+/*//TODO Maybe introduce scss (SASS) to tame this thing a little*/
+
+.mv-style {
+	--main-bg-colour: #232323;
+	--secondary-bg-colour: #282e2e;
+	--tertiary-bg-colour: #394443;
+	--highlight: #438ab5;
+
+	color: #aaa;
+	font-family: "Segoe", sans-serif;
+	font-size: 12px;
+	user-select: none;
+}
+
+.mv-root {
+	margin: 0px;
+	padding: 0px;
+	overflow: hidden;
+	background-color: var(--main-bg-colour);
+	position: absolute;
+	top: 0px;
+	bottom: 0px;
+	left: 0px;
+	right: 0px;
+	display: grid;
+	grid-template-columns: auto min-content;
+	grid-template-rows: minmax(0, 1fr);
+}
+
+.mv-root--vertical {
+	grid-template-columns: 100%;
+	grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.mv-root--vertical .mv-sidebar {
+	width: 100%;
+	max-width: 100%;
+}
+
+.mv-image-preview {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	height: 135px;
+}
+
+.mv-image-preview-canvas {
+	max-width: 100%;
+	max-height: 100%;
+	background: url("alphachecker.png");
+	background-color: #242424;
+}
+
+.mv-copy-text {
+	user-select: all;
+}
+
+.sub-btn {
+	background-repeat: no-repeat;
+	background-color: #fbcc4a;
+	border-color: #fbcc4a;
+}
+
+.sub-btn.active {
+	background-color: #dba617;
+	border-color: #b79845;
+	border-style: inset;
+}
+
+.sub-btn-search {
+	background-image: url("search-btn.png");
+}
+
+.sub-btn-plus {
+	background-image: url("search-btn-plus.png");
+	background-color: transparent;
+	border: hidden;
+}
+
+.sub-btn-minus {
+	background-image: url("search-btn-minus.png");
+	background-color: transparent;
+	border: hidden;
+}
+
+.mv-style input[type="text"],
+.mv-style input[type="number"],
+.mv-style select {
+	background-color: #000000aa;
+	border: 1px solid #88888888;
+	border-radius: 3px;
+	color: #aaaaaa;
+	line-height: 21px;
+	padding-left: 10px;
+	min-width: 20px;
+	box-sizing: border-box;
+}
+
+.mv-style a {
+	color: white;
+}
+
+.mv-style input[type="color"] {
+	width: auto;
+}
+
+.mv-style input[type="text"]:focus,
+.mv-style select:focus {
+	outline-color: #1e96e0;
+}
+
+.mv-style textarea {
+	background: #232323;
+	color: white;
+}
+
+.mv-canvas {
+	width: 100%;
+	height: 100%;
+}
+
+.mv-sidebar {
+	background-color: var(--secondary-bg-colour);
+	min-width: 220px;
+	width: 31vw;
+	max-width: 400px;
+	height: 100%;
+	box-shadow: 0px 0px 34px #00000033;
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	padding: 10px;
+}
+
+.mv-sidebar-scroll {
+	overflow-y: scroll;
+	flex: 1;
+	margin: 0px -10px;
+	padding: 0px 10px;
+	overflow-x: hidden;
+}
+
+.mv-sidebar-spacer {
+	height: 5px;
+}
+
+.mv-inset {
+	background: rgba(0, 0, 0, 0.2);
+	padding: 5px;
+	border-radius: 5px;
+	margin: 3px 0px;
+}
+
+.mv-inset .mv-inset {
+	background: none;
+	padding: 0px;
+}
+
+.mv-json-block {
+	user-select: text;
+	overflow-x: auto;
+}
+
+.mv-style ::-webkit-scrollbar {
+	width: 8px;
+}
+
+.mv-style ::-webkit-scrollbar-thumb {
+	background-color: #8397a5;
+	border-radius: 4px;
+	margin-right: 5px;
+}
+
+.mv-style ::-webkit-scrollbar-thumb:active {
+	background-color: #438ab5;
+}
+
+.mv-style ::-webkit-scrollbar-track {
+	background-color: #00000033;
+	border-radius: 4px;
+}
+
+.map-grid-container {
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+.map-grid-root {
+	display: grid;
+	width: fit-content;
+	background: black;
+	border: 1px solid #555;
+	margin: 0px auto;
+}
+
+.map-grid-area {
+	text-align: center;
+	border: 1px solid;
+	background-color: #013c00;
+	background-size: contain;
+	color: black;
+	display: flex;
+	align-items: end;
+}
+
+.map-grid-area-loading {
+	background-color: orange;
+}
+
+.mv-modal-head {
+	font-size: 1.2em;
+	display: grid;
+	grid-template-columns: auto min-content min-content min-content;
+	padding: 8px;
+	background: var(--secondary-bg-colour);
+}
+
+.mv-modal-body {
+	padding: 10px;
+	overflow-y: auto;
+}
+
+.mv-modal {
+	min-width: 300px;
+	width: 90%;
+	background: var(--tertiary-bg-colour);
+	max-height: 80%;
+	box-shadow: 0px 0px 10px 5px black;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+}
+
+.mv-modal-container {
+	position: fixed;
+	top: 0px;
+	left: 0px;
+	right: 0px;
+	bottom: 0px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.mv-searchbar {
+	display: flex;
+}
+
+.mv-searchbar-input {
+	flex: 1;
+}
+
+.mv-tab-strip {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mv-errortext {
+	background: #a22;
+	padding: 3px;
+	margin: 3px 0px;
+	color: white;
+	border-radius: 2px;
+}
+
+.mv-icon-button {
+	position: relative;
+	margin: 5px;
+	border-radius: 2px;
+	text-shadow: 0px 0px 5px #00000033;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 24px;
+	text-align: center;
+}
+
+.mv-icon-button.active {
+	background-color: #3e5b6d;
+	color: white;
+}
+
+.mv-icon-button:hover {
+	background-color: #438ab5;
+	color: #ffffff;
+}
+
+.mv-overridegroup {
+	clear: both;
+	display: grid;
+	grid-template-columns: 1fr 1fr min-content;
+	padding: 5px;
+	align-items: center;
+}
+
+.mv-overridegroup__border {
+	border-radius: 5px;
+	border: 1px solid #5e5e5e;
+	margin: 5px 0px;
+}
+
+.mv-hexrow {
+	white-space: pre;
+	user-select: text;
+	font-family: monospace;
+	line-height: 1.25;/*forces all lines to be same height*/
+}
+
+.mv-hexlabel {
+	position: fixed;
+	top: 180px;
+}
+
+.mv-hexstickylabel {
+	position: sticky;
+	top: 50px;
+	bottom: 50px;
+}
+
+.mv-hex--select {
+	background-color: #fff3;
+}
+
+.cs-valuegroup {
+	display: flex;
+	flex-direction: row;
+}
+
+.cs2-value {
+	margin-right: 0.5em;
+	max-width: 14em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

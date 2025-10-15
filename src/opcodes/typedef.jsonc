@@ -1,0 +1,235 @@
+{
+	"variable unsigned long": "varuint",
+	"variable unsigned int": "varuint",
+	"variable unsigned short": "varushort",
+	"unsigned variable long": "varuint",
+	"unsigned variable int": "varuint",
+	"unsigned variable short": "varushort",
+	"variable long": "varint",
+	"variable int": "varint",
+	"variable short": "varshort",
+	"unsigned long": "uint",
+	"unsigned int": "uint",
+	"unsigned short": "ushort",
+	"unsigned byte": "ubyte",
+	"long": "int",
+	"ushort le": "ushort_le",
+	"uint le": "uint_le",
+	"playeritem": [
+		"playeritem"
+	],
+	"playeritemedit": [
+		"struct",
+		[
+			"$type",
+			"ubyte"
+		],
+		[
+			"model",
+			[
+				"opt",
+				[
+					"$type",
+					0,
+					"bitflag"
+				],
+				[
+					"array",
+					[
+						"itemvar",
+						"modelcount"
+					],
+					"varuint"
+				]
+			]
+		],
+		[
+			"flag2",
+			[
+				"opt",
+				[
+					"$type",
+					1,
+					"bitflag"
+				],
+				"true"
+			]
+		],
+		[
+			"color",
+			[
+				"opt",
+				[
+					"$type",
+					2,
+					"bitflag"
+				],
+				[
+					"struct",
+					[
+						"$coltype",
+						"ushort"
+					],
+					[
+						"col2",
+						[
+							"opt",
+							[
+								"$coltype",
+								12816
+							],
+							[
+								"array",
+								[
+									"itemvar",
+									"colorcount"
+								],
+								"ushort"
+							]
+						]
+					],
+					[
+						"col4",
+						[
+							"opt",
+							[
+								"$coltype",
+								8719
+							],
+							[
+								"array",
+								4,
+								[
+									"tuple",
+									"ushort",
+									"ushort"
+								]
+							]
+						]
+					]
+				]
+			]
+		],
+		[
+			"material",
+			[
+				"opt",
+				[
+					"$type",
+					3,
+					"bitflag"
+				],
+				[
+					"struct",
+					[
+						"header",
+						"ubyte"
+					],
+					[
+						"materials",
+						[
+							"array",
+							[
+								"itemvar",
+								"matcount"
+							],
+							"ushort"
+						]
+					]
+				]
+			]
+		]
+	],
+	"ubyte": "unsigned byte",
+	"ushort": "unsigned short",
+	"uint": "unsigned int",
+	"varushort": "variable unsigned short",
+	"varuint": "variable unsigned int",
+	"varshort": "variable short",
+	"varint": "variable int",
+	"unsigned tribyte": "utribyte",
+	"tailed unsigned short": [
+		"tailed varushort"
+	],
+	"boolean": "bool",
+	//obsolete backward compat
+	"true": true,
+	"false": false,
+	"0": 0,
+	"1": 1,
+	"-1": -1,
+	"null": null,
+	"extrasmap": [
+		"array",
+		"ubyte",
+		[
+			"struct",
+			[
+				"$type",
+				"unsigned byte"
+			],
+			[
+				"prop",
+				"unsigned tribyte"
+			],
+			[
+				"intvalue",
+				[
+					"opt",
+					[
+						"$type",
+						0
+					],
+					"int"
+				]
+			],
+			[
+				"stringvalue",
+				[
+					"opt",
+					[
+						"$type",
+						1
+					],
+					"string"
+				]
+			]
+		]
+	],
+	"buildnr": [
+		"buildnr"
+	], //needs to be in array to get invoked as function
+	"item_modelid": [
+		"match",
+		"buildnr",
+		{
+			">=670": "varuint",
+			">=0": "ushort"
+		}
+	],
+	"animid": [
+		"match",
+		"buildnr",
+		{
+			">=670": "varnullint",
+			">=0": "ushort"
+		}
+	],
+	"uivalues": [
+		"array",
+		"ubyte",
+		[
+			"match",
+			"ubyte",
+			{
+				"0": "int",
+				"1": "string"
+			}
+		]
+	],
+	"uivaluesint": [
+		"array",
+		"ubyte",
+		"int"
+	]
+}

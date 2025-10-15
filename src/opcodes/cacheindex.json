@@ -1,0 +1,40 @@
+["struct",
+	["format","unsigned byte"],
+	["timestamp",["match",["ref","format"],{">=6":"uint","other":0}]],
+	["flags","unsigned byte"],
+	["$minorindex","0"],
+	["indices",["chunkedarray",["match",["ref","format"],{">=7":"varuint","other":"ushort"}],
+		[
+			["minor",["accum","$minorindex","unsigned short"]]
+		],
+		[
+			["name",["opt",["flags",0,"bitflag"],"unsigned int"]]
+		],
+		[
+			["crc","unsigned int"]
+		],
+		[
+			["uncompressed_crc",["opt",["flags",2,"bitflag"],"unsigned int"]]
+		],
+		[
+			["size",["opt",["flags",2,"bitflag"],"unsigned int"]],
+			["uncompressed_size",["opt",["flags",2,"bitflag"],"unsigned int"]]
+		],
+		[
+			["encryption_or_hash",["opt",["flags",1,"bitflag"],["buffer",64,"hex"]]]
+		],
+		[
+			["version","unsigned int"]
+		],
+		[
+			["subindexcount","variable unsigned int"]
+		],
+		[
+			["$subindex","0"],
+			["subindices",["array",["ref","subindexcount"],["accum","$subindex","unsigned short"]]]
+		],
+		[
+			["subnames",["opt",["flags",0,"bitflag"],["array",["ref","subindexcount"],"uint"]]]
+		]
+	]]
+]

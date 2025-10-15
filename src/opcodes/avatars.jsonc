@@ -1,0 +1,30 @@
+["struct",
+	["gender","ubyte"],
+	["$avatype","playeritem"],
+	["player",["opt",["$avatype",-1,"eqnot"],["struct",
+		["slots",["tuple",
+			["ref","$avatype"],
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem",
+			"playeritem"
+		]],
+		["rest",["buffer",["bytesleft"],"hex"]]
+	]]],
+	["npc",["opt",["$avatype",-1],["struct",
+		["id","ushort"],
+		["buf",["buffer",21,"hex"]],
+		["unkff","ushort"]
+	]]]
+]

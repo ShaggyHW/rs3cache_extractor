@@ -1,0 +1,27 @@
+["struct",
+	["$idcounter","-1"],
+	["locations",["nullarray","tailed unsigned short",["struct",
+		["id",["accum","$idcounter",["ref","$opcode"]]],
+		["$location","0"],
+		["uses",["nullarray","variable unsigned short",["struct",
+			["$loc",["accum","$location",["ref","$opcode"],"add-1"]],
+			["y",["ref","$loc",[0,6]]],
+			["x",["ref","$loc",[6,6]]],
+			["plane",["ref","$loc",[12,2]]],
+			["$data","unsigned byte"],
+			["rotation",["ref","$data",[0,2]]],
+			["type",["ref","$data",[2,5]]],
+			["extra",["opt",["$data",7,"bitflag"],["struct",
+				["flags","unsigned byte"],
+				["rotation",["opt",["flags",0,"bitflag"],["array",4,"short"]]],
+				["translateX",["opt",["flags",1,"bitflag"],"short"]],
+				["translateY",["opt",["flags",2,"bitflag"],"short"]],
+				["translateZ",["opt",["flags",3,"bitflag"],"short"]],
+				["scale",["opt",["flags",4,"bitflag"],"unsigned short"]],
+				["scaleX",["opt",["flags",5,"bitflag"],"unsigned short"]],
+				["scaleY",["opt",["flags",6,"bitflag"],"unsigned short"]],
+				["scaleZ",["opt",["flags",7,"bitflag"],"unsigned short"]]
+			]]]
+		]]]
+	]]]
+]

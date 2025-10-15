@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="UTF-8">
+	<title>RuneScape Model Viewer</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';" />
+	<link rel="stylesheet" href="index.css" />
+</head>
+
+<body>
+	<div id="app"></div>
+	<script>
+		function loaded(rsmv, isweb) {
+			let rootel = document.getElementById("app");
+			rsmv.start(rootel, isweb);
+		}
+
+		if (typeof require != "undefined") {
+			let rsmvimport = require("../electronviewer.js");
+			loaded(rsmvimport, false);
+		} else {
+			let viewerscript = document.createElement("script");
+			viewerscript.src = "../webviewer.js";
+			document.body.appendChild(viewerscript);
+			viewerscript.onload = () => loaded(RSMV, true);
+		}
+	</script>
+</body>
+
+</html>
