@@ -2,17 +2,17 @@ import os
 import sqlite3
 from collections import deque
 
-SOURCE_DB_PATH = "/home/query/Dev/tiles.db"  # path to your source SQLite database
+SOURCE_DB_PATH = "tiles.db"  # path to your source SQLite database
 OUTPUT_DB_PATH = "worldReachableTiles.db"  # path to the output SQLite database containing reachable tiles
 START_TILE = (3200, 3200, 0)  # example starting tile (x, y, plane)
 NODE_TABLES = [
-    "door_nodes",
-    "lodestone_nodes",
-    "object_nodes",
-    "ifslot_nodes",
-    "npc_nodes",
-    "item_nodes",
-    "requirements"
+    "teleports_door_nodes",
+    "teleports_lodestone_nodes",
+    "teleports_object_nodes",
+    "teleports_ifslot_nodes",
+    "teleports_npc_nodes",
+    "teleports_item_nodes",
+    "teleports_requirements"
 ]
 
 
@@ -56,7 +56,7 @@ def get_door_links(conn):
     cur.execute(
         """SELECT tile_inside_x, tile_inside_y, tile_inside_plane,
                   tile_outside_x, tile_outside_y, tile_outside_plane
-           FROM door_nodes"""
+           FROM teleports_door_nodes"""
     )
     links = []
     for row in cur.fetchall():
@@ -69,7 +69,7 @@ def get_door_links(conn):
 def get_lodestone_tiles(conn):
     """Return list of all lodestone destination tiles."""
     cur = conn.cursor()
-    cur.execute("SELECT dest_x, dest_y, dest_plane FROM lodestone_nodes")
+    cur.execute("SELECT dest_x, dest_y, dest_plane FROM teleports_lodestone_nodes")
     return [(x, y, p) for x, y, p in cur.fetchall()]
 
 
@@ -89,7 +89,7 @@ def get_object_transitions(conn):
         SELECT
             orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane,
             dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane
-        FROM object_nodes
+        FROM teleports_object_nodes
         """
     )
 
@@ -165,7 +165,7 @@ def get_npc_transitions(conn):
         SELECT
             orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane,
             dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane
-        FROM npc_nodes
+        FROM teleports_npc_nodes
         """
     )
 
@@ -238,7 +238,7 @@ def get_ifslot_dest_tiles(conn):
     cur.execute(
         """
         SELECT dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane
-        FROM ifslot_nodes
+        FROM teleports_ifslot_nodes
         """
     )
 
