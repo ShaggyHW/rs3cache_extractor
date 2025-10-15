@@ -1,3 +1,18 @@
+# TILE DATA EXTRACTION
+
+```sh
+npm run install
+npm run build
+
+./extract-all.sh
+
+node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
+
+python load_tiles.py
+
+python import_xlsx_to_db.py --xlsx https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo --db tiles.db
+```
+
 # RuneScape Model Viewer (.js)
 A RuneScape cache downloader, decoder and model viewer implemented in TypeScript. The tool will download the cache directly from the game servers and decode parts of into usable data and models. 
 
