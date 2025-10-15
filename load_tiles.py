@@ -51,6 +51,136 @@ def create_tables(conn):
             PRIMARY KEY (chunk_x, chunk_z)
         )
     """)
+    cur.execute("""
+        CREATE TABLE "teleports_door_nodes" (
+	"id"	INTEGER,
+	"direction"	REAL,
+	"real_id_open"	INTEGER,
+	"real_id_closed"	INTEGER,
+	"location_open_x"	INTEGER,
+	"location_open_y"	INTEGER,
+	"location_open_plane"	INTEGER,
+	"location_closed_x"	INTEGER,
+	"location_closed_y"	INTEGER,
+	"location_closed_plane"	INTEGER,
+	"tile_inside_x"	INTEGER,
+	"tile_inside_y"	INTEGER,
+	"tile_inside_plane"	INTEGER,
+	"tile_outside_x"	INTEGER,
+	"tile_outside_y"	INTEGER,
+	"tile_outside_plane"	INTEGER,
+	"open_action"	TEXT,
+	"cost"	INTEGER,
+	"next_node_type"	REAL,
+	"next_node_id"	REAL,
+	"requirement_id"	REAL
+);
+    """)
+    cur.execute("""
+        CREATE TABLE "teleports_ifslot_nodes" (
+	"id"	INTEGER,
+	"interface_id"	INTEGER,
+	"component_id"	INTEGER,
+	"slot_id"	INTEGER,
+	"click_id"	INTEGER,
+	"dest_min_x"	REAL,
+	"dest_max_x"	REAL,
+	"dest_min_y"	REAL,
+	"dest_max_y"	REAL,
+	"dest_plane"	REAL,
+	"cost"	INTEGER,
+	"next_node_type"	TEXT,
+	"next_node_id"	REAL,
+	"requirement_id"	REAL
+);
+    """)
+    cur.execute("""
+     CREATE TABLE "teleports_item_nodes" (
+	"id"	INTEGER,
+	"item_id"	INTEGER,
+	"action"	TEXT,
+	"dest_min_x"	INTEGER,
+	"dest_max_x"	INTEGER,
+	"dest_min_y"	INTEGER,
+	"dest_max_y"	INTEGER,
+	"dest_plane"	INTEGER,
+	"next_node_type"	REAL,
+	"next_node_id"	REAL,
+	"cost"	INTEGER,
+	"requirement_id"	INTEGER
+);
+    """)
+
+    cur.execute("""
+   CREATE TABLE "teleports_lodestone_nodes" (
+	"id"	INTEGER,
+	"lodestone"	TEXT,
+	"dest_x"	INTEGER,
+	"dest_y"	INTEGER,
+	"dest_plane"	INTEGER,
+	"cost"	INTEGER,
+	"next_node_type"	REAL,
+	"next_node_id"	REAL,
+	"requirement_id"	REAL
+);
+    """)
+    cur.execute("""
+   CREATE TABLE "teleports_npc_nodes" (
+	"id"	INTEGER,
+	"match_type"	TEXT,
+	"npc_id"	INTEGER,
+	"npc_name"	REAL,
+	"action"	TEXT,
+	"dest_min_x"	REAL,
+	"dest_max_x"	REAL,
+	"dest_min_y"	REAL,
+	"dest_max_y"	REAL,
+	"dest_plane"	INTEGER,
+	"search_radius"	INTEGER,
+	"cost"	INTEGER,
+	"orig_min_x"	REAL,
+	"orig_max_x"	REAL,
+	"orig_min_y"	REAL,
+	"orig_max_y"	REAL,
+	"orig_plane"	INTEGER,
+	"next_node_type"	TEXT,
+	"next_node_id"	INTEGER,
+	"requirement_id"	INTEGER
+);
+    """)
+    cur.execute("""
+   CREATE TABLE "teleports_object_nodes" (
+	"id"	INTEGER,
+	"match_type"	TEXT,
+	"object_id"	REAL,
+	"object_name"	TEXT,
+	"action"	TEXT,
+	"dest_min_x"	INTEGER,
+	"dest_max_x"	INTEGER,
+	"dest_min_y"	INTEGER,
+	"dest_max_y"	INTEGER,
+	"dest_plane"	INTEGER,
+	"orig_min_x"	INTEGER,
+	"orig_max_x"	INTEGER,
+	"orig_min_y"	INTEGER,
+	"orig_max_y"	INTEGER,
+	"orig_plane"	INTEGER,
+	"search_radius"	INTEGER,
+	"cost"	INTEGER,
+	"next_node_type"	TEXT,
+	"next_node_id"	REAL,
+	"requirement_id"	REAL
+);
+    """)
+    cur.execute("""
+CREATE TABLE "teleports_requirements" (
+	"id"	INTEGER,
+	"metaInfo"	TEXT,
+	"key"	TEXT,
+	"value"	REAL,
+	"comparison"	TEXT
+);
+    """)
     conn.commit()
 
 def insert_tiles(conn, chunk, tiles):
