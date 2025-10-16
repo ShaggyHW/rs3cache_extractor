@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from collections import deque
+from collections import deque, OrderedDict
 import json
 
 SOURCE_DB_PATH = "tiles.db"  # path to your source SQLite database
@@ -14,7 +14,11 @@ NODE_TABLES = [
     "teleports_npc_nodes",
     "teleports_item_nodes",
     "teleports_requirements",
-    "chunks"
+    "chunks",
+    "cluster_entrances",
+    "cluster_intraconnections",
+    "cluster_interconnections",
+    "abstract_teleport_edges",
 ]
 
 
@@ -165,30 +169,56 @@ def reconcile_walk_data(conn, tile, walk_data):
     return data
 
 
-def build_reconciled_cache(conn):
-    # """
-    # Fast path: reconcile entirely in memory.
-    # Returns {(x,y,plane): dict-walk}.
-    # """
-    # print("Loading walk map...")
-    # walk_map = _load_walk_map(conn)
-    # print("Reconciling walk map...")
-    # _reconcile_walk_map_inplace(walk_map)
-    # return walk_map
-    cur = conn.cursor()
-    cache = {}
-    cur.execute("SELECT x, y, plane, walk_data FROM tiles")
-    rows = cur.fetchall()
-    total = len(rows)
-    for i, (x, y, plane, wd) in enumerate(rows):
-        print(f"Reconciling walk data for tile {(x, y, plane)} number {i}/{total}")
-        reconciled = reconcile_walk_data(conn, (x, y, plane), wd)
+class ReconciledWalkCache:
+    def __init__(self, conn, max_entries=50000):
+        self.conn = conn
+        self.max_entries = max_entries
+        self._cache = OrderedDict()
+
+    def _load(self, tile):
+        x, y, plane = tile
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT walk_data FROM tiles WHERE x=? AND y=? AND plane=?",
+            (x, y, plane),
+        )
+        row = cur.fetchone()
+        raw = row[0] if row else None
+        reconciled = reconcile_walk_data(self.conn, tile, raw)
+        if not reconciled:
+            return {}
         try:
-            parsed = json.loads(reconciled) if isinstance(reconciled, str) else reconciled
-            cache[(x, y, plane)] = parsed if isinstance(parsed, dict) else {}
+            parsed = (
+                json.loads(reconciled)
+                if isinstance(reconciled, str)
+                else dict(reconciled)
+            )
+            return parsed if isinstance(parsed, dict) else {}
         except Exception:
-            cache[(x, y, plane)] = {}
-    return cache
+            return {}
+
+    def get(self, tile, default=None):
+        if tile in self._cache:
+            value = self._cache.pop(tile)
+            self._cache[tile] = value
+            return value
+        value = self._load(tile)
+        if not value and default is not None:
+            value = default
+        self._cache[tile] = value
+        if self.max_entries and len(self._cache) > self.max_entries:
+            self._cache.popitem(last=False)
+        return value
+
+
+def build_reconciled_cache(conn):
+    max_entries_env = os.environ.get("RECONCILED_CACHE_MAX_ENTRIES")
+    try:
+        max_entries = int(max_entries_env) if max_entries_env else 50000
+    except ValueError:
+        max_entries = 50000
+    print(f"Initializing reconciled cache with max_entries={max_entries}")
+    return ReconciledWalkCache(conn, max_entries=max_entries)
 
 
 def get_neighbors_from_cache(cache, x, y, plane):
@@ -684,6 +714,18 @@ def copy_tables(source_conn, dest_conn, tables):
         else:
             print(f"No rows found in {table}; created empty table")
 
+        index_rows = source_cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+            (table,),
+        ).fetchall()
+        for (index_sql,) in index_rows:
+            try:
+                dest_cur.execute(index_sql)
+            except Exception as e:
+                print(f"Warning: Failed to create index on {table}: {e}")
+        if index_rows:
+            print(f"Created {len(index_rows)} indexes for {table}")
+
     dest_conn.commit()
     print("Committed copied node tables to output database")
 
@@ -745,6 +787,22 @@ def main():
     print(f"Creating new output database at {OUTPUT_DB_PATH}")
     output_conn = sqlite3.connect(OUTPUT_DB_PATH)
     write_reachable_tiles(output_conn, create_tiles_sql, tile_columns, tile_rows)
+    try:
+        tiles_index_rows = source_cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='tiles' AND sql IS NOT NULL"
+        ).fetchall()
+        out_cur = output_conn.cursor()
+        created_idx = 0
+        for (idx_sql,) in tiles_index_rows:
+            try:
+                out_cur.execute(idx_sql)
+                created_idx += 1
+            except Exception as e:
+                print(f"Warning: Failed to create tiles index: {e}")
+        if created_idx:
+            print(f"Created {created_idx} indexes for tiles in output database")
+    except Exception as e:
+        print(f"Warning: Could not recreate tiles indexes: {e}")
     copy_tables(source_conn, output_conn, NODE_TABLES)
     output_conn.close()
     print("Output database connection closed")
