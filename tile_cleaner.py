@@ -30,6 +30,249 @@ DIRS = {
     "southwest": (-1, -1, 0),
 }
 
+WALK_KEY_TO_DIR = {
+    "top": "north",
+    "bottom": "south",
+    "right": "east",
+    "left": "west",
+    "topright": "northeast",
+    "topleft": "northwest",
+    "bottomright": "southeast",
+    "bottomleft": "southwest",
+}
+
+RECIPROCAL = {
+    "left": "right",
+    "right": "left",
+    "top": "bottom",
+    "bottom": "top",
+    "topleft": "bottomright",
+    "topright": "bottomleft",
+    "bottomleft": "topright",
+    "bottomright": "topleft",
+}
+
+KEY_TO_DELTA = {
+    k: DIRS[v] for k, v in WALK_KEY_TO_DIR.items()
+}
+
+DIAG_REQUIRE = {
+    "topleft": ("top", "left"),
+    "topright": ("top", "right"),
+    "bottomleft": ("bottom", "left"),
+    "bottomright": ("bottom", "right"),
+}
+
+
+def sanitize_walk_data(walk_data, tile, reachable_tiles):
+    if not walk_data:
+        return walk_data
+
+    try:
+        data = json.loads(walk_data) if isinstance(walk_data, str) else dict(walk_data)
+    except Exception:
+        return walk_data
+
+    changed = False
+    tx, ty, tp = tile
+    for key, direction in WALK_KEY_TO_DIR.items():
+        allowed = data.get(key)
+        if not allowed:
+            continue
+        dx, dy, dp = DIRS[direction]
+        neighbor = (tx + dx, ty + dy, tp + dp)
+        if neighbor not in reachable_tiles:
+            data[key] = False
+            changed = True
+
+    if not changed:
+        return walk_data
+
+    if isinstance(walk_data, str):
+        return json.dumps(data, separators=(",", ":"))
+    return data
+
+
+def reconcile_walk_data(conn, tile, walk_data):
+    if not walk_data:
+        return walk_data
+    try:
+        data = json.loads(walk_data) if isinstance(walk_data, str) else dict(walk_data)
+    except Exception:
+        return walk_data
+
+    if not isinstance(data, dict):
+        return walk_data
+
+    tx, ty, tp = tile
+    cur = conn.cursor()
+    cache = {}
+
+    def get_neighbor_walk(nx, ny, np):
+        key = (nx, ny, np)
+        if key in cache:
+            return cache[key]
+        cur.execute(
+            "SELECT walk_data FROM tiles WHERE x=? AND y=? AND plane=?",
+            (nx, ny, np),
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            cache[key] = None
+            return None
+        try:
+            val = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            cache[key] = val if isinstance(val, dict) else None
+        except Exception:
+            cache[key] = None
+        return cache[key]
+
+    changed = False
+
+    for key in ("left", "right", "top", "bottom"):
+        allowed = bool(data.get(key))
+        if not allowed:
+            continue
+        dx, dy, dp = KEY_TO_DELTA[key]
+        nx, ny, np = tx + dx, ty + dy, tp + dp
+        nwalk = get_neighbor_walk(nx, ny, np)
+        nrecip = bool(nwalk.get(RECIPROCAL[key])) if isinstance(nwalk, dict) else False
+        if not nrecip:
+            data[key] = False
+            changed = True
+
+    for key in ("topleft", "topright", "bottomleft", "bottomright"):
+        allowed = bool(data.get(key))
+        if not allowed:
+            continue
+        req1, req2 = DIAG_REQUIRE[key]
+        if not (bool(data.get(req1)) and bool(data.get(req2))):
+            data[key] = False
+            changed = True
+            continue
+        dx, dy, dp = KEY_TO_DELTA[key]
+        nx, ny, np = tx + dx, ty + dy, tp + dp
+        nwalk = get_neighbor_walk(nx, ny, np)
+        nrecip = bool(nwalk.get(RECIPROCAL[key])) if isinstance(nwalk, dict) else False
+        if not nrecip:
+            data[key] = False
+            changed = True
+
+    if not changed:
+        return walk_data
+    if isinstance(walk_data, str):
+        return json.dumps(data, separators=(",", ":"))
+    return data
+
+
+def build_reconciled_cache(conn):
+    # """
+    # Fast path: reconcile entirely in memory.
+    # Returns {(x,y,plane): dict-walk}.
+    # """
+    # print("Loading walk map...")
+    # walk_map = _load_walk_map(conn)
+    # print("Reconciling walk map...")
+    # _reconcile_walk_map_inplace(walk_map)
+    # return walk_map
+    cur = conn.cursor()
+    cache = {}
+    cur.execute("SELECT x, y, plane, walk_data FROM tiles")
+    rows = cur.fetchall()
+    total = len(rows)
+    for i, (x, y, plane, wd) in enumerate(rows):
+        print(f"Reconciling walk data for tile {(x, y, plane)} number {i}/{total}")
+        reconciled = reconcile_walk_data(conn, (x, y, plane), wd)
+        try:
+            parsed = json.loads(reconciled) if isinstance(reconciled, str) else reconciled
+            cache[(x, y, plane)] = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            cache[(x, y, plane)] = {}
+    return cache
+
+
+def get_neighbors_from_cache(cache, x, y, plane):
+    walk = cache.get((x, y, plane)) or {}
+    neighbors = []
+    if isinstance(walk, dict):
+        for k, allowed in walk.items():
+            print(f"Processing neighbor {k} for tile {(x, y, plane)}")
+            if allowed and isinstance(k, str):
+                d = WALK_KEY_TO_DIR.get(k.lower())
+                if d in DIRS:
+                    dx, dy, dp = DIRS[d]
+                    neighbors.append((x + dx, y + dy, plane + dp))
+    return neighbors
+
+
+
+def _load_walk_map(conn):
+    """Load and parse walk_data for all tiles into memory once."""
+    cur = conn.cursor()
+    cur.execute("SELECT x, y, plane, walk_data FROM tiles")
+    walk_map = {}
+    for i, (x, y, p, wd) in enumerate(cur.fetchall()):
+        print(f"Loading walk data for tile {(x, y, p)} {i}/{len(walk_map)}")
+        if not wd:
+            walk_map[(x, y, p)] = {}
+            continue
+        try:
+            obj = json.loads(wd) if isinstance(wd, str) else dict(wd)
+            walk_map[(x, y, p)] = obj if isinstance(obj, dict) else {}
+        except Exception:
+            walk_map[(x, y, p)] = {}
+    return walk_map
+
+
+def _reconcile_walk_map_inplace(walk_map):
+    """
+    Make cardinal/diagonal links consistent with neighbors, in memory.
+    Mutates walk_map values (dicts) in place.
+    """
+    changed_any = False
+
+    def neighbor_key(x, y, p, key):
+        dx, dy, dp = KEY_TO_DELTA[key]
+        return (x + dx, y + dy, p + dp)
+
+    for i, (tx, ty, tp), data in enumerate(walk_map.items()):
+        print(f"Reconciling walk data for tile {(tx, ty, tp)} {i}/{len(walk_map)}")
+        if not data:
+            continue
+
+        # Work on a copy to compare at the end
+        d = dict(data)
+
+        # 1) Cardinals must be reciprocated
+        for key in ("left", "right", "top", "bottom"):
+            if not d.get(key):
+                continue
+            nk = neighbor_key(tx, ty, tp, key)
+            nwalk = walk_map.get(nk)
+            nrecip = bool(nwalk.get(RECIPROCAL[key])) if isinstance(nwalk, dict) else False
+            if not nrecip:
+                d[key] = False
+
+        # 2) Diagonals require both adjacent cardinals locally AND reciprocal on neighbor
+        for key in ("topleft", "topright", "bottomleft", "bottomright"):
+            if not d.get(key):
+                continue
+            req1, req2 = DIAG_REQUIRE[key]
+            if not (bool(d.get(req1)) and bool(d.get(req2))):
+                d[key] = False
+                continue
+            nk = neighbor_key(tx, ty, tp, key)
+            nwalk = walk_map.get(nk)
+            nrecip = bool(nwalk.get(RECIPROCAL[key])) if isinstance(nwalk, dict) else False
+            if not nrecip:
+                d[key] = False
+
+        if d != data:
+            walk_map[(tx, ty, tp)] = d
+            changed_any = True
+
+    return changed_any
+
 
 def get_neighbors(conn, x, y, plane):
     """Return list of connected tiles from current tile based on allowed_directions."""
@@ -43,25 +286,15 @@ def get_neighbors(conn, x, y, plane):
         return []
 
     try:
-        walk = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        reconciled = reconcile_walk_data(conn, (x, y, plane), row[0])
+        walk = json.loads(reconciled) if isinstance(reconciled, str) else reconciled
     except Exception:
         return []
-
-    key_to_dir = {
-        "top": "north",
-        "bottom": "south",
-        "right": "east",
-        "left": "west",
-        "topright": "northeast",
-        "topleft": "northwest",
-        "bottomright": "southeast",
-        "bottomleft": "southwest",
-    }
 
     neighbors = []
     for k, allowed in (walk.items() if isinstance(walk, dict) else []):
         if allowed and isinstance(k, str):
-            d = key_to_dir.get(k.lower())
+            d = WALK_KEY_TO_DIR.get(k.lower())
             if d in DIRS:
                 dx, dy, dp = DIRS[d]
                 neighbors.append((x + dx, y + dy, plane + dp))
@@ -305,7 +538,7 @@ def get_ifslot_dest_tiles(conn):
     return dest_tiles
 
 
-def reachable_tiles(conn, start):
+def reachable_tiles(conn, start, reconciled_cache=None):
     """BFS to find all reachable tiles using allowed directions, doors, lodestones,
     object transitions, npc transitions, and ifslot destinations."""
     queue = deque([start])
@@ -332,8 +565,12 @@ def reachable_tiles(conn, start):
 
         print(f"Processing tile {(x, y, plane)}")
 
-        # Step 1: Move based on allowed directions
-        for nx, ny, np in get_neighbors(conn, x, y, plane):
+        # Step 1: Move based on allowed directions (prefer reconciled cache if provided)
+        if reconciled_cache is not None:
+            nexts = get_neighbors_from_cache(reconciled_cache, x, y, plane)
+        else:
+            nexts = get_neighbors(conn, x, y, plane)
+        for nx, ny, np in nexts:
             if (nx, ny, np) not in visited:
                 visited.add((nx, ny, np))
                 queue.append((nx, ny, np))
@@ -456,8 +693,10 @@ def main():
     source_conn = sqlite3.connect(SOURCE_DB_PATH)
     source_conn.row_factory = sqlite3.Row
     source_cur = source_conn.cursor()
-
-    reachable = reachable_tiles(source_conn, START_TILE)
+    print(f"Building reconciled cache")
+    reconciled_cache = build_reconciled_cache(source_conn)
+    print(f"Building reachable tiles")
+    reachable = reachable_tiles(source_conn, START_TILE, reconciled_cache)
     print(f"Reachable tiles found: {len(reachable)}")
 
     create_tiles_sql_row = source_cur.execute(
@@ -476,6 +715,8 @@ def main():
 
     tile_rows = []
     missing_tiles = []
+    walk_index = tile_columns.index("walk_data") if "walk_data" in tile_columns else None
+
     for tile in reachable:
         source_cur.execute(
             "SELECT * FROM tiles WHERE x=? AND y=? AND plane=?",
@@ -485,7 +726,12 @@ def main():
         if row is None:
             missing_tiles.append(tile)
             continue
-        tile_rows.append(tuple(row[col] for col in tile_columns))
+        row_dict = {col: row[col] for col in tile_columns}
+        if walk_index is not None:
+            base = json.dumps(reconciled_cache.get(tile, {}), separators=(",", ":"))
+            wd = sanitize_walk_data(base, tile, reachable)
+            row_dict["walk_data"] = wd
+        tile_rows.append(tuple(row_dict[col] for col in tile_columns))
 
     if missing_tiles:
         print(f"Warning: {len(missing_tiles)} reachable tiles missing from source tiles table")

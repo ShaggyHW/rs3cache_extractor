@@ -181,6 +181,101 @@ CREATE TABLE "teleports_requirements" (
 	"comparison"	TEXT
 );
     """)
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_tiles_xyplane ON tiles(x, y, plane);
+    """)
+    
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_tiles_chunk ON tiles(chunk_x, chunk_z, plane);
+    """)
+
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_tiles_walkable
+ON tiles(x, y, plane)
+WHERE blocked = 0;
+    """)
+    
+    
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_tiles_chunk_boundary
+ON tiles(chunk_x, chunk_z, (x % 64), (y % 64), plane);
+    """)
+    
+    cur.execute("""
+CREATE VIEW IF NOT EXISTS teleports_all AS
+SELECT
+  'door' AS kind, id,
+  tile_outside_x AS src_x, tile_outside_y AS src_y, tile_outside_plane AS src_plane,
+  tile_inside_x  AS dst_x,  tile_inside_y  AS dst_y,  tile_inside_plane  AS dst_plane,
+  cost, requirement_id
+FROM teleports_door_nodes
+UNION ALL
+SELECT 'lodestone', id, dest_x, dest_y, dest_plane, dest_x, dest_y, dest_plane, cost, requirement_id
+FROM teleports_lodestone_nodes
+UNION ALL
+SELECT 'npc', id, orig_min_x, orig_min_y, orig_plane, dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+FROM teleports_npc_nodes
+UNION ALL
+SELECT 'object', id, orig_min_x, orig_min_y, orig_plane, dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+FROM teleports_object_nodes
+UNION ALL
+SELECT 'item', id, dest_min_x, dest_min_y, dest_plane, dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+FROM teleports_item_nodes;
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS cluster_entrances (
+  entrance_id   INTEGER PRIMARY KEY,
+  chunk_x       INTEGER NOT NULL,
+  chunk_z       INTEGER NOT NULL,
+  plane         INTEGER NOT NULL,
+  x             INTEGER NOT NULL,
+  y             INTEGER NOT NULL,
+  neighbor_dir  TEXT    NOT NULL CHECK (neighbor_dir IN ('N','S','E','W')), -- side of the boundary
+  UNIQUE (chunk_x, chunk_z, plane, x, y)
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS cluster_intraconnections (
+  chunk_x_from  INTEGER NOT NULL,
+  chunk_z_from  INTEGER NOT NULL,
+  plane_from    INTEGER NOT NULL,
+  entrance_from INTEGER NOT NULL,
+  entrance_to   INTEGER NOT NULL,
+  cost          INTEGER NOT NULL,     -- scale by 1024 to avoid floats; diag ~1448, straight=1024
+  path_blob     BLOB,                 -- optional: compressed polyline of (x,y) deltas
+  PRIMARY KEY (chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to)
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS cluster_interconnections (
+  entrance_from INTEGER PRIMARY KEY,
+  entrance_to   INTEGER NOT NULL,
+  cost          INTEGER NOT NULL      -- usually straight step cost (or 0 if you “snap” entrances)
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
+  edge_id       INTEGER PRIMARY KEY,
+  src_x         INTEGER NOT NULL,
+  src_y         INTEGER NOT NULL,
+  src_plane     INTEGER NOT NULL,
+  dst_x         INTEGER NOT NULL,
+  dst_y         INTEGER NOT NULL,
+  dst_plane     INTEGER NOT NULL,
+  cost          INTEGER NOT NULL,
+  requirement_id INTEGER,             -- tie back to your requirements table
+  src_entrance  INTEGER,              -- optional: if you snap sources to nearest entrance
+  dst_entrance  INTEGER               -- optional
+);
+
+    """)
+
     conn.commit()
 
 def insert_tiles(conn, chunk, tiles):
