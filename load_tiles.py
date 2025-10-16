@@ -278,8 +278,7 @@ CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
 
     conn.commit()
 
-def insert_tiles(conn, chunk, tiles):
-    cur = conn.cursor()
+def insert_tiles(cur, chunk, tiles):
     chunk_x = None
     chunk_z = None
     chunk_size = None
@@ -316,19 +315,25 @@ def insert_tiles(conn, chunk, tiles):
             (x, y, plane, chunk_x, chunk_z, flag, blocked, walk_mask, blocked_mask, walk_data)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, entries)
-    conn.commit()
 
 def load_json_files(folder, conn):
-    for filename in os.listdir(folder):
-        if filename.endswith(".json"):
-            filepath = os.path.join(folder, filename)
-            print(f"Loading {filepath}...")
-            with open(filepath, "r") as f:
-                data = json.load(f)
-            tiles = data.get("tiles", [])
-            if not tiles:
-                continue
-            insert_tiles(conn, data.get("chunk", {}), tiles)
+    cur = conn.cursor()
+    conn.execute("BEGIN")
+    try:
+        for filename in os.listdir(folder):
+            if filename.endswith(".json"):
+                filepath = os.path.join(folder, filename)
+                print(f"Loading {filepath}...")
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+                tiles = data.get("tiles", [])
+                if not tiles:
+                    continue
+                insert_tiles(cur, data.get("chunk", {}), tiles)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 def main():
     conn = sqlite3.connect(DB_FILE)
