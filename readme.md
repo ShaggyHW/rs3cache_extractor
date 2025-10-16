@@ -4,13 +4,13 @@
 npm run install
 npm run build
 
-./extract-all.sh
-
 node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
 
 python load_tiles.py
 
 python import_xlsx_to_db.py --xlsx https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo --db tiles.db
+
+python tile_cleaner.py
 ```
 
 # RuneScape Model Viewer (.js)

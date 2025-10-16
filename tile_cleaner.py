@@ -730,6 +730,30 @@ def copy_tables(source_conn, dest_conn, tables):
     print("Committed copied node tables to output database")
 
 
+def copy_views(source_conn, dest_conn):
+    source_cur = source_conn.cursor()
+    dest_cur = dest_conn.cursor()
+
+    rows = source_cur.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL"
+    ).fetchall()
+
+    copied = 0
+    for name, view_sql in rows:
+        print(f"Copying view {name} into output database")
+        try:
+            dest_cur.execute(view_sql)
+            copied += 1
+        except Exception as e:
+            print(f"Warning: Failed to create view {name}: {e}")
+
+    dest_conn.commit()
+    if copied:
+        print(f"Committed {copied} views to output database")
+    else:
+        print("No views found to copy")
+
+
 def main():
     print(f"Connecting to source database at {SOURCE_DB_PATH}")
     source_conn = sqlite3.connect(SOURCE_DB_PATH)
@@ -804,6 +828,7 @@ def main():
     except Exception as e:
         print(f"Warning: Could not recreate tiles indexes: {e}")
     copy_tables(source_conn, output_conn, NODE_TABLES)
+    copy_views(source_conn, output_conn)
     output_conn.close()
     print("Output database connection closed")
 
