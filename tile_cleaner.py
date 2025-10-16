@@ -212,11 +212,11 @@ class ReconciledWalkCache:
 
 
 def build_reconciled_cache(conn):
-    max_entries_env = os.environ.get("RECONCILED_CACHE_MAX_ENTRIES")
-    try:
-        max_entries = int(max_entries_env) if max_entries_env else 50000
-    except ValueError:
-        max_entries = 50000
+    # max_entries_env = os.environ.get("RECONCILED_CACHE_MAX_ENTRIES")
+    # try:
+    #     max_entries = int(max_entries_env) if max_entries_env else 500000
+    # except ValueError:
+    max_entries = 5000000
     print(f"Initializing reconciled cache with max_entries={max_entries}")
     return ReconciledWalkCache(conn, max_entries=max_entries)
 
