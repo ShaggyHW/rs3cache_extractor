@@ -1,6 +1,7 @@
 import os
 import sqlite3
 from collections import deque
+import json
 
 SOURCE_DB_PATH = "tiles.db"  # path to your source SQLite database
 OUTPUT_DB_PATH = "worldReachableTiles.db"  # path to the output SQLite database containing reachable tiles
@@ -12,7 +13,8 @@ NODE_TABLES = [
     "teleports_ifslot_nodes",
     "teleports_npc_nodes",
     "teleports_item_nodes",
-    "teleports_requirements"
+    "teleports_requirements",
+    "chunks"
 ]
 
 
@@ -33,20 +35,36 @@ def get_neighbors(conn, x, y, plane):
     """Return list of connected tiles from current tile based on allowed_directions."""
     cur = conn.cursor()
     cur.execute(
-        "SELECT allowed_directions FROM tiles WHERE x=? AND y=? AND plane=?",
+        "SELECT walk_data FROM tiles WHERE x=? AND y=? AND plane=?",
         (x, y, plane),
     )
     row = cur.fetchone()
     if not row or not row[0]:
         return []
 
-    directions = [d.strip().lower() for d in row[0].split(",")]
-    neighbors = []
+    try:
+        walk = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except Exception:
+        return []
 
-    for d in directions:
-        if d in DIRS:
-            dx, dy, dp = DIRS[d]
-            neighbors.append((x + dx, y + dy, plane + dp))
+    key_to_dir = {
+        "top": "north",
+        "bottom": "south",
+        "right": "east",
+        "left": "west",
+        "topright": "northeast",
+        "topleft": "northwest",
+        "bottomright": "southeast",
+        "bottomleft": "southwest",
+    }
+
+    neighbors = []
+    for k, allowed in (walk.items() if isinstance(walk, dict) else []):
+        if allowed and isinstance(k, str):
+            d = key_to_dir.get(k.lower())
+            if d in DIRS:
+                dx, dy, dp = DIRS[d]
+                neighbors.append((x + dx, y + dy, plane + dp))
     return neighbors
 
 
@@ -202,15 +220,27 @@ def get_npc_transitions(conn):
             count_skipped += 1
             continue
 
+        # Coerce potential REALs to ints
+        o_min_x_i = int(o_min_x)
+        o_max_x_i = int(o_max_x)
+        o_min_y_i = int(o_min_y)
+        o_max_y_i = int(o_max_y)
+        o_plane_i = int(o_plane)
+        d_min_x_i = int(d_min_x)
+        d_max_x_i = int(d_max_x)
+        d_min_y_i = int(d_min_y)
+        d_max_y_i = int(d_max_y)
+        d_plane_i = int(d_plane)
+
         dest_tiles = [
-            (dx, dy, d_plane)
-            for dx in range(d_min_x, d_max_x + 1)
-            for dy in range(d_min_y, d_max_y + 1)
+            (dx, dy, d_plane_i)
+            for dx in range(d_min_x_i, d_max_x_i + 1)
+            for dy in range(d_min_y_i, d_max_y_i + 1)
         ]
 
-        for ox in range(o_min_x, o_max_x + 1):
-            for oy in range(o_min_y, o_max_y + 1):
-                origin = (ox, oy, o_plane)
+        for ox in range(o_min_x_i, o_max_x_i + 1):
+            for oy in range(o_min_y_i, o_max_y_i + 1):
+                origin = (ox, oy, o_plane_i)
                 if origin not in transitions:
                     transitions[origin] = set()
                 for dt in dest_tiles:
@@ -256,9 +286,17 @@ def get_ifslot_dest_tiles(conn):
         if None in (d_min_x, d_max_x, d_min_y, d_max_y, d_plane):
             count_skipped += 1
             continue
-        for dx in range(d_min_x, d_max_x + 1):
-            for dy in range(d_min_y, d_max_y + 1):
-                dest_tiles.append((dx, dy, d_plane))
+
+        # Coerce potential REALs to ints
+        d_min_x_i = int(d_min_x)
+        d_max_x_i = int(d_max_x)
+        d_min_y_i = int(d_min_y)
+        d_max_y_i = int(d_max_y)
+        d_plane_i = int(d_plane)
+
+        for dx in range(d_min_x_i, d_max_x_i + 1):
+            for dy in range(d_min_y_i, d_max_y_i + 1):
+                dest_tiles.append((dx, dy, d_plane_i))
 
     print(
         f"Loaded {count_rows} ifslot nodes: {len(dest_tiles)} destination tiles, "

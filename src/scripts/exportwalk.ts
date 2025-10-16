@@ -10,7 +10,7 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 
 	for (let cx = startx; cx < startx + sizex; cx++) {
 		for (let cz = startz; cz < startz + sizez; cz++) {
-			const parsed = await parseMapsquare(engine, cx, cz, { collision: true });
+			const parsed = await parseMapsquare(engine, cx, cz, { collision: true, map2d: true, minimap: true, hashboxes: true, skybox: true, invisibleLayers: true, padfloor: true });
 			if (!parsed.chunk) { continue; }
 
 			const grid = parsed.grid as TileGrid;
@@ -42,6 +42,7 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 							{ dx: 1, dz: 1, opp: 6 } // topright <-> bottomleft
 						];
 						const alloweds: boolean[] = new Array(8).fill(false);
+						const diagonalDeps: number[][] = [[], [], [], [], [0, 3], [0, 1], [2, 1], [2, 3]];
 						for (let i = 0; i < dirMap.length; i++) {
 							const idx = dirMap[i];
 							const bit = (1 << i);
@@ -52,6 +53,14 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 							if (ncol) {
 								// If neighbor blocks entry by center or by opposite edge, we must block this direction too
 								if (ncol.walk[0] || ncol.walk[d.opp]) { blocked = true; }
+							}
+							if (!blocked) {
+								const deps = diagonalDeps[i];
+								if (deps.length) {
+									for (const dep of deps) {
+										if (!alloweds[dep]) { blocked = true; break; }
+									}
+								}
 							}
 							if (blocked) { blockedMask |= bit; } else { allowedMask |= bit; alloweds[i] = true; }
 						}

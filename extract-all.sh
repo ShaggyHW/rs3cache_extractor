@@ -80,12 +80,8 @@ declare -A M=(
 
 # If you want a specific order, list it here; otherwise the default iteration is fine.
 ORDER=(
-  overlays
-  underlays
-  maptiles
-  maptiles_nxt
+
   maplocations
-  objects
 )
 
 # Run all

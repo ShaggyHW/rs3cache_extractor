@@ -1810,6 +1810,7 @@ export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, loca
 				10, 11,
 				12, 13, 14, 15, 16, 17, 18, 19, 20, 21//roof types, only some are confirmed
 			]
+			const straightWallDirs = [1, 4, 3, 2];
 
 			if (collision && !rawloc.probably_nocollision) {
 				for (let dz = 0; dz < sizez; dz++) {
@@ -1823,16 +1824,19 @@ export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, loca
 								col.walk[0] = true;
 							}
 							if (inst.type == 0) {
-								col.walk[1 + inst.rotation] = true;
+								const dir = straightWallDirs[inst.rotation & 3];
+								col.walk[dir] = true;
 								if (!rawloc.maybe_allows_lineofsight) {
-									col.sight[1 + inst.rotation] = true;
+									col.sight[dir] = true;
 								}
 							} else if (inst.type == 2) {
-								col.walk[1 + inst.rotation] = true;
-								col.walk[1 + (inst.rotation + 1) % 4] = true;
+								const dirA = straightWallDirs[inst.rotation & 3];
+								const dirB = straightWallDirs[(inst.rotation + 1) & 3];
+								col.walk[dirA] = true;
+								col.walk[dirB] = true;
 								if (!rawloc.maybe_allows_lineofsight) {
-									col.sight[1 + inst.rotation] = true;
-									col.sight[1 + (inst.rotation + 1) % 4] = true;
+									col.sight[dirA] = true;
+									col.sight[dirB] = true;
 								}
 							} else if (inst.type == 1 || inst.type == 3) {
 								col.walk[5 + inst.rotation] = true;
