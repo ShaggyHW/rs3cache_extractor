@@ -6,20 +6,6 @@ import json
 SOURCE_DB_PATH = "tiles.db"  # path to your source SQLite database
 OUTPUT_DB_PATH = "worldReachableTiles.db"  # path to the output SQLite database containing reachable tiles
 START_TILE = (3200, 3200, 0)  # example starting tile (x, y, plane)
-NODE_TABLES = [
-    "teleports_door_nodes",
-    "teleports_lodestone_nodes",
-    "teleports_object_nodes",
-    "teleports_ifslot_nodes",
-    "teleports_npc_nodes",
-    "teleports_item_nodes",
-    "teleports_requirements",
-    "chunks",
-    "cluster_entrances",
-    "cluster_intraconnections",
-    "cluster_interconnections",
-    "abstract_teleport_edges",
-]
 
 
 # Direction to coordinate delta
@@ -676,12 +662,24 @@ def write_reachable_tiles(conn, create_tiles_sql, tile_columns, tile_rows):
     print(f"Committed {len(tile_rows)} reachable tiles to output database")
 
 
-def copy_tables(source_conn, dest_conn, tables):
+def copy_tables(source_conn, dest_conn, tables=None, skip_tables=None):
     """Copy table schemas and contents from source_conn into dest_conn."""
     source_cur = source_conn.cursor()
     dest_cur = dest_conn.cursor()
 
+    if tables is None:
+        tables = [
+            row[0]
+            for row in source_cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        ]
+
+    skip_set = set(skip_tables or ())
+
     for table in tables:
+        if table in skip_set:
+            continue
         print(f"Copying table {table} into output database")
 
         create_row = source_cur.execute(
@@ -703,14 +701,21 @@ def copy_tables(source_conn, dest_conn, tables):
         column_clause = ", ".join(columns)
         placeholders = ", ".join("?" for _ in columns)
         select_sql = f"SELECT {column_clause} FROM {table}"
-        rows = source_cur.execute(select_sql).fetchall()
-        if rows:
-            insert_sql = f"INSERT INTO {table} ({column_clause}) VALUES ({placeholders})"
+        insert_sql = f"INSERT INTO {table} ({column_clause}) VALUES ({placeholders})"
+        inserted = 0
+        batch_size = 50000
+        rows_cursor = source_cur.execute(select_sql)
+        while True:
+            batch = rows_cursor.fetchmany(batch_size)
+            if not batch:
+                break
             dest_cur.executemany(
                 insert_sql,
-                [tuple(row[col] for col in columns) for row in rows],
+                [tuple(row[col] for col in columns) for row in batch],
             )
-            print(f"Inserted {len(rows)} rows into {table}")
+            inserted += len(batch)
+        if inserted:
+            print(f"Inserted {inserted} rows into {table}")
         else:
             print(f"No rows found in {table}; created empty table")
 
@@ -827,7 +832,7 @@ def main():
             print(f"Created {created_idx} indexes for tiles in output database")
     except Exception as e:
         print(f"Warning: Could not recreate tiles indexes: {e}")
-    copy_tables(source_conn, output_conn, NODE_TABLES)
+    copy_tables(source_conn, output_conn, skip_tables={"tiles"})
     copy_views(source_conn, output_conn)
     output_conn.close()
     print("Output database connection closed")

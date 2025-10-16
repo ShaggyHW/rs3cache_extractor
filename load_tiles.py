@@ -12,8 +12,36 @@ def _table_has_columns(cur, table_name, required_columns):
     existing = {row[1] for row in cur.fetchall()}
     return required_columns.issubset(existing)
 
+def _cluster_intraconnections_requires_migration(cur):
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cluster_intraconnections'")
+    if not cur.fetchone():
+        return False
+    cur.execute("PRAGMA table_info(cluster_intraconnections)")
+    info = cur.fetchall()
+    present = {row[1] for row in info}
+    required = {"chunk_x_from", "chunk_z_from", "plane_from", "entrance_from", "entrance_to", "cost", "path_blob"}
+    if not required.issubset(present):
+        return True
+    cur.execute("PRAGMA foreign_key_list(cluster_intraconnections)")
+    fk_targets = [row[2] for row in cur.fetchall() if row[2]]
+    return fk_targets.count("cluster_entrances") < 2
+
+def _cluster_interconnections_requires_migration(cur):
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cluster_interconnections'")
+    if not cur.fetchone():
+        return False
+    cur.execute("PRAGMA table_info(cluster_interconnections)")
+    info = cur.fetchall()
+    pk_map = {row[1]: row[5] for row in info}
+    if pk_map.get("entrance_from") is None or pk_map.get("entrance_to") is None:
+        return True
+    cur.execute("PRAGMA foreign_key_list(cluster_interconnections)")
+    fk_map = {row[3]: row[2] for row in cur.fetchall()}
+    return fk_map.get("entrance_from") != "cluster_entrances" or fk_map.get("entrance_to") != "cluster_entrances"
+
 def create_tables(conn):
     cur = conn.cursor()
+    conn.execute("PRAGMA foreign_keys = ON")
     tiles_columns = {"x", "y", "plane", "chunk_x", "chunk_z", "flag", "blocked", "walk_mask", "blocked_mask", "walk_data"}
     chunks_columns = {"chunk_x", "chunk_z", "chunk_size", "tile_count"}
 
@@ -24,6 +52,50 @@ def create_tables(conn):
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
     if cur.fetchone() and not _table_has_columns(cur, "chunks", chunks_columns):
         cur.execute("DROP TABLE chunks")
+
+    if _cluster_intraconnections_requires_migration(cur):
+        cur.execute("""
+            CREATE TABLE cluster_intraconnections_new (
+              chunk_x_from  INTEGER NOT NULL,
+              chunk_z_from  INTEGER NOT NULL,
+              plane_from    INTEGER NOT NULL,
+              entrance_from INTEGER NOT NULL,
+              entrance_to   INTEGER NOT NULL,
+              cost          INTEGER NOT NULL,
+              path_blob     BLOB,
+              PRIMARY KEY (chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to),
+              FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+              FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id)
+            )
+        """)
+        cur.execute("""
+            INSERT INTO cluster_intraconnections_new
+              (chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to, cost, path_blob)
+            SELECT chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to, cost, path_blob
+            FROM cluster_intraconnections
+        """)
+        cur.execute("DROP TABLE cluster_intraconnections")
+        cur.execute("ALTER TABLE cluster_intraconnections_new RENAME TO cluster_intraconnections")
+
+    if _cluster_interconnections_requires_migration(cur):
+        cur.execute("""
+            CREATE TABLE cluster_interconnections_new (
+              entrance_from INTEGER NOT NULL,
+              entrance_to   INTEGER NOT NULL,
+              cost          INTEGER NOT NULL,
+              PRIMARY KEY (entrance_from, entrance_to),
+              FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+              FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id)
+            )
+        """)
+        cur.execute("""
+            INSERT INTO cluster_interconnections_new
+              (entrance_from, entrance_to, cost)
+            SELECT entrance_from, entrance_to, cost
+            FROM cluster_interconnections
+        """)
+        cur.execute("DROP TABLE cluster_interconnections")
+        cur.execute("ALTER TABLE cluster_interconnections_new RENAME TO cluster_interconnections")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS tiles (
@@ -185,24 +257,22 @@ CREATE TABLE "teleports_requirements" (
     cur.execute("""
 CREATE INDEX IF NOT EXISTS idx_tiles_xyplane ON tiles(x, y, plane);
     """)
-    
+
     cur.execute("""
 CREATE INDEX IF NOT EXISTS idx_tiles_chunk ON tiles(chunk_x, chunk_z, plane);
     """)
-
 
     cur.execute("""
 CREATE INDEX IF NOT EXISTS idx_tiles_walkable
 ON tiles(x, y, plane)
 WHERE blocked = 0;
     """)
-    
-    
+
     cur.execute("""
 CREATE INDEX IF NOT EXISTS idx_tiles_chunk_boundary
 ON tiles(chunk_x, chunk_z, (x % 64), (y % 64), plane);
     """)
-    
+
     cur.execute("""
 CREATE VIEW IF NOT EXISTS teleports_all AS
 SELECT
@@ -233,7 +303,7 @@ CREATE TABLE IF NOT EXISTS cluster_entrances (
   plane         INTEGER NOT NULL,
   x             INTEGER NOT NULL,
   y             INTEGER NOT NULL,
-  neighbor_dir  TEXT    NOT NULL CHECK (neighbor_dir IN ('N','S','E','W')), -- side of the boundary
+  neighbor_dir  TEXT    NOT NULL CHECK (neighbor_dir IN ('N','S','E','W')),
   UNIQUE (chunk_x, chunk_z, plane, x, y)
 );
     """)
@@ -245,17 +315,22 @@ CREATE TABLE IF NOT EXISTS cluster_intraconnections (
   plane_from    INTEGER NOT NULL,
   entrance_from INTEGER NOT NULL,
   entrance_to   INTEGER NOT NULL,
-  cost          INTEGER NOT NULL,     -- scale by 1024 to avoid floats; diag ~1448, straight=1024
-  path_blob     BLOB,                 -- optional: compressed polyline of (x,y) deltas
-  PRIMARY KEY (chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to)
+  cost          INTEGER NOT NULL,
+  path_blob     BLOB,
+  PRIMARY KEY (chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to),
+  FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+  FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id)
 );
     """)
 
     cur.execute("""
 CREATE TABLE IF NOT EXISTS cluster_interconnections (
-  entrance_from INTEGER PRIMARY KEY,
+  entrance_from INTEGER NOT NULL,
   entrance_to   INTEGER NOT NULL,
-  cost          INTEGER NOT NULL      -- usually straight step cost (or 0 if you “snap” entrances)
+  cost          INTEGER NOT NULL,
+  PRIMARY KEY (entrance_from, entrance_to),
+  FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+  FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id)
 );
     """)
 
@@ -269,14 +344,97 @@ CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
   dst_y         INTEGER NOT NULL,
   dst_plane     INTEGER NOT NULL,
   cost          INTEGER NOT NULL,
-  requirement_id INTEGER,             -- tie back to your requirements table
-  src_entrance  INTEGER,              -- optional: if you snap sources to nearest entrance
-  dst_entrance  INTEGER               -- optional
+  requirement_id INTEGER,
+  src_entrance  INTEGER,
+  dst_entrance  INTEGER
 );
-
     """)
 
-    conn.commit()
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_cluster_entrances_plane_xy
+ON cluster_entrances(plane, x, y);
+    """)
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_cluster_intra_from_to
+ON cluster_intraconnections(chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to);
+    """)
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_cluster_inter_to
+ON cluster_interconnections(entrance_to);
+    """)
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_abstract_teleport_src
+ON abstract_teleport_edges(src_plane, src_x, src_y);
+    """)
+
+    cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_abstract_teleport_dst
+ON abstract_teleport_edges(dst_plane, dst_x, dst_y);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS movement_policy (
+  policy_id INTEGER PRIMARY KEY CHECK(policy_id = 1),
+  allow_diagonals INTEGER NOT NULL,
+  allow_corner_cut INTEGER NOT NULL,
+  unit_radius_tiles INTEGER NOT NULL
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS jps_jump (
+  x INTEGER NOT NULL,
+  y INTEGER NOT NULL,
+  plane INTEGER NOT NULL,
+  dir INTEGER NOT NULL,
+  next_x INTEGER,
+  next_y INTEGER,
+  forced_mask INTEGER,
+  PRIMARY KEY (x, y, plane, dir)
+);
+    """)
+
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS jps_spans (
+  x INTEGER NOT NULL,
+  y INTEGER NOT NULL,
+  plane INTEGER NOT NULL,
+  left_block_at INTEGER,
+  right_block_at INTEGER,
+  up_block_at INTEGER,
+  down_block_at INTEGER,
+  PRIMARY KEY (x, y, plane)
+);
+    """)
+
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("movement_cost_straight", "1024")
+    )
+    cur.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("movement_cost_diagonal", "1448")
+    )
+    cur.execute(
+        """
+        INSERT INTO movement_policy(policy_id, allow_diagonals, allow_corner_cut, unit_radius_tiles)
+        VALUES(1, 1, 0, 1)
+        ON CONFLICT(policy_id) DO UPDATE SET
+          allow_diagonals=excluded.allow_diagonals,
+          allow_corner_cut=excluded.allow_corner_cut,
+          unit_radius_tiles=excluded.unit_radius_tiles
+        """
+    )
 
 def insert_tiles(cur, chunk, tiles):
     chunk_x = None
@@ -294,6 +452,7 @@ def insert_tiles(cur, chunk, tiles):
             """, (chunk_x, chunk_z, chunk_size, len(tiles)))
 
     entries = []
+    batch_size = 50000
     for tile in tiles:
         walk = tile.get("walk", {})
         entries.append((
@@ -308,6 +467,13 @@ def insert_tiles(cur, chunk, tiles):
             tile.get("blockedMask"),
             json.dumps(walk)
         ))
+        if len(entries) >= batch_size:
+            cur.executemany("""
+                INSERT OR REPLACE INTO tiles 
+                (x, y, plane, chunk_x, chunk_z, flag, blocked, walk_mask, blocked_mask, walk_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, entries)
+            entries.clear()
 
     if entries:
         cur.executemany("""
@@ -317,9 +483,8 @@ def insert_tiles(cur, chunk, tiles):
         """, entries)
 
 def load_json_files(folder, conn):
-    cur = conn.cursor()
-    conn.execute("BEGIN")
-    try:
+    with conn:
+        cur = conn.cursor()
         for filename in os.listdir(folder):
             if filename.endswith(".json"):
                 filepath = os.path.join(folder, filename)
@@ -330,13 +495,12 @@ def load_json_files(folder, conn):
                 if not tiles:
                     continue
                 insert_tiles(cur, data.get("chunk", {}), tiles)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
 
 def main():
     conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
     create_tables(conn)
     load_json_files(JSON_FOLDER, conn)
     conn.close()
