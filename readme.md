@@ -1,7 +1,7 @@
 # TILE DATA EXTRACTION
 
 ```sh
-npm run install
+npm install
 npm run build
 
 node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
