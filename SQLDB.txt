@@ -1,15 +1,3 @@
-use anyhow::{bail, Result};
-use rusqlite::{Connection, OptionalExtension};
-
-pub fn create_tables(conn: &mut Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-
-    if schema_has_user_tables(conn)? {
-        bail!("Database already contains tables; delete the existing file before running.");
-    }
-
-    conn.execute_batch(
-        r#"
 -- ========== TABLES ==========
 
 CREATE TABLE abstract_teleport_edges (
@@ -23,8 +11,8 @@ CREATE TABLE abstract_teleport_edges (
     cost INTEGER NOT NULL,
     requirement_id INTEGER,
     src_entrance INTEGER,
-    dst_entrance INTEGER,
-    CONSTRAINT chk_ate_cost_nonneg CHECK (cost >= 0)
+    dst_entrance INTEGER.
+    CONSTRAINT chk_ate_cost_nonneg CHECK (cost >= 0);
 );
 
 CREATE TABLE clusters (
@@ -316,20 +304,3 @@ SELECT 'ifslot', id, NULL, NULL, NULL,
        CAST(dest_plane AS INTEGER), cost, requirement_id
 FROM teleports_ifslot_nodes
 WHERE dest_min_x IS NOT NULL;
-
-    "#,
-    )?;
-
-    Ok(())
-}
-
-fn schema_has_user_tables(conn: &Connection) -> Result<bool> {
-    let existing: Option<String> = conn
-        .query_row(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(existing.is_some())
-}

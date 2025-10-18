@@ -119,7 +119,6 @@ pub fn build_clusters(
 
         // Deterministic ordering of components: by first tile, then length
         components.sort_by(|a, b| a.first().cmp(&b.first()).then(a.len().cmp(&b.len())));
-        components.retain(|c| c.len() >= 4);
 
         // Write to output DB in a transaction
         let comps_len = components.len();
