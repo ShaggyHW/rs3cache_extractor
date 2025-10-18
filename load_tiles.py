@@ -124,6 +124,17 @@ def create_tables(conn):
         )
     """)
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_clusters (
+          cluster_id INTEGER PRIMARY KEY,
+          chunk_x    INTEGER NOT NULL,
+          chunk_z    INTEGER NOT NULL,
+          plane      INTEGER NOT NULL,
+          label      INTEGER,
+          tile_count INTEGER,
+          FOREIGN KEY (chunk_x, chunk_z) REFERENCES chunks(chunk_x, chunk_z)
+        )
+    """)
+    cur.execute("""
         CREATE TABLE "teleports_door_nodes" (
 	"id"	INTEGER,
 	"direction"	REAL,

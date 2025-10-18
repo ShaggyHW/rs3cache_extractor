@@ -80,8 +80,16 @@ declare -A M=(
 
 # If you want a specific order, list it here; otherwise the default iteration is fine.
 ORDER=(
-
-  maplocations
+  framemaps
+  items
+  enums
+  npcs
+  objects
+  achievements
+  structs
+  sequences
+  spotanims
+  
 )
 
 # Run all

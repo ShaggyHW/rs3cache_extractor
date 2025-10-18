@@ -1,0 +1,18 @@
+[package]
+name = "rs3cache_extractor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+calamine = "0.21"
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+url = "2.5"
+tempfile = "3.10"
+rayon = "1.10"
+log = "0.4"
+env_logger = "0.11"
