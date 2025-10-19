@@ -20,7 +20,7 @@ impl Config {
         let chunk_range = env::var("CLUSTER_CHUNK_RANGE").ok().and_then(|s| parse_chunk_range(&s));
         let threads = env::var("CLUSTER_THREADS").ok().and_then(|s| s.parse::<usize>().ok());
         let dry_run = env::var("CLUSTER_DRY_RUN").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
-        let store_paths = env::var("CLUSTER_STORE_PATHS").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        let store_paths = env::var("CLUSTER_STORE_PATHS").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(true);
         let log_level = env::var("CLUSTER_LOG_LEVEL").ok();
         Self { tiles_db, out_db, planes, chunk_range, threads, dry_run, store_paths, log_level }
     }

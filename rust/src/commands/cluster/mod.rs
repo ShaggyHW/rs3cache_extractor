@@ -55,16 +55,16 @@ pub enum ClusterCommand {
     #[command(name = "inter-connector")]
     InterConnector,
 
-    
+
     /// Build intra-cluster connections (optional path storage)
     #[command(name = "intra-connector")]
     IntraConnector,
-    /// Precompute JPS acceleration structures
-    #[command(name = "jps-accelerator")]
-    JpsAccelerator,
-    /// Inspect neighbor policy (stub)
-    #[command(name = "neighbor-policy")]
-    NeighborPolicy,
+    // /// Precompute JPS acceleration structures
+    // #[command(name = "jps-accelerator")]
+    // JpsAccelerator,
+    // /// Inspect neighbor policy (stub)
+    // #[command(name = "neighbor-policy")]
+    // NeighborPolicy,
     /// Run full executor pipeline with resume/force controls
     #[command(name = "exec")]
     Exec {
@@ -135,11 +135,11 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
 
     // Open connections as needed per subcommand
     match sub {
-        ClusterCommand::NeighborPolicy => {
-            // Stub: just touch MovementPolicy to validate linkage
-            let _p = neighbor_policy::MovementPolicy::default();
-            Ok(())
-        }
+        // ClusterCommand::NeighborPolicy => {
+        //     // Stub: just touch MovementPolicy to validate linkage
+        //     let _p = neighbor_policy::MovementPolicy::default();
+        //     Ok(())
+        // }
         ClusterCommand::BuildClusters => {
             let mut out = db::open_rw(&out_path)?;
             let tiles = db::open_ro(&tiles_path)?;
@@ -165,12 +165,12 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
             let _ = teleport_connector::create_teleport_edges(&mut out, &cfg)?;
             Ok(())
         }
-        ClusterCommand::JpsAccelerator => {
-            let mut out = db::open_rw(&out_path)?;
-            let tiles = db::open_ro(&tiles_path)?;
-            let _ = jps_accelerator::build_jps(&tiles, &mut out, &cfg)?;
-            Ok(())
-        }
+        // ClusterCommand::JpsAccelerator => {
+        //     let mut out = db::open_rw(&out_path)?;
+        //     let tiles = db::open_ro(&tiles_path)?;
+        //     let _ = jps_accelerator::build_jps(&tiles, &mut out, &cfg)?;
+        //     Ok(())
+        // }
         ClusterCommand::Exec { resume, force } => {
             let mut out = db::open_rw(&out_path)?;
             let tiles = db::open_ro(&tiles_path)?;

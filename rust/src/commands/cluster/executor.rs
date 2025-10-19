@@ -54,7 +54,7 @@ pub struct ExecStats {
 }
 
 pub fn run_pipeline(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config, opts: ExecOptions) -> Result<ExecStats> {
-    ensure_schema(out_db)?; // ensure meta table etc.
+  //  ensure_schema(out_db)?; // ensure meta table etc.
 
     let mut stats = ExecStats::default();
 

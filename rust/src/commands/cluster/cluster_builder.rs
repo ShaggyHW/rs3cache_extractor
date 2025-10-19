@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use super::config::Config;
-use super::db::{ensure_schema, with_tx};
+use super::db::{with_tx};
 use super::neighbor_policy::{MovementPolicy, Offset};
 
 #[derive(Clone, Debug, Default)]
