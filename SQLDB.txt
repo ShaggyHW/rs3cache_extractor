@@ -281,7 +281,7 @@ SELECT 'object', id, orig_min_x, orig_min_y, orig_plane,
        dest_min_x, dest_min_y, dest_plane, cost, requirement_id
 FROM teleports_object_nodes
 UNION ALL
-SELECT 'item', id, dest_min_x, dest_min_y, dest_plane,
+SELECT 'item', id, NULL, NULL, NULL,
        dest_min_x, dest_min_y, dest_plane, cost, requirement_id
 FROM teleports_item_nodes
 UNION ALL

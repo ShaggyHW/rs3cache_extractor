@@ -2,17 +2,17 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-pub mod config;
-pub mod logging;
-pub mod db;
-pub mod models;
 pub mod cluster_builder;
-pub mod neighbor_policy;
+pub mod config;
+pub mod db;
 pub mod entrance_discovery;
-pub mod intra_connector;
-pub mod inter_connector;
-pub mod jps_accelerator;
 pub mod executor;
+pub mod inter_connector;
+pub mod intra_connector;
+pub mod jps_accelerator;
+pub mod logging;
+pub mod models;
+pub mod neighbor_policy;
 pub mod teleport_connector;
 
 #[derive(Args, Debug, Clone)]
@@ -51,12 +51,12 @@ pub enum ClusterCommand {
     /// Discover entrances between adjacent clusters
     #[command(name = "entrance-discovery")]
     EntranceDiscovery,
-    /// Build intra-cluster connections (optional path storage)
-    #[command(name = "intra-connector")]
-    IntraConnector,
     /// Build inter-cluster connections across entrances
     #[command(name = "inter-connector")]
     InterConnector,
+    /// Build intra-cluster connections (optional path storage)
+    #[command(name = "intra-connector")]
+    IntraConnector,
     /// Precompute JPS acceleration structures
     #[command(name = "jps-accelerator")]
     JpsAccelerator,
@@ -92,19 +92,37 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
     cfg.log_level = common.log_level.clone();
     // Overlay env (env > CLI precedence as designed)
     let env_cfg = config::Config::from_env_defaults();
-    if env_cfg.tiles_db.is_some() { cfg.tiles_db = env_cfg.tiles_db; }
-    if env_cfg.out_db.is_some() { cfg.out_db = env_cfg.out_db; }
-    if env_cfg.planes.is_some() { cfg.planes = env_cfg.planes; }
-    if env_cfg.chunk_range.is_some() { cfg.chunk_range = env_cfg.chunk_range; }
-    if env_cfg.threads.is_some() { cfg.threads = env_cfg.threads; }
-    if env_cfg.dry_run { cfg.dry_run = true; }
-    if env_cfg.store_paths { cfg.store_paths = true; }
-    if env_cfg.log_level.is_some() { cfg.log_level = env_cfg.log_level; }
+    if env_cfg.tiles_db.is_some() {
+        cfg.tiles_db = env_cfg.tiles_db;
+    }
+    if env_cfg.out_db.is_some() {
+        cfg.out_db = env_cfg.out_db;
+    }
+    if env_cfg.planes.is_some() {
+        cfg.planes = env_cfg.planes;
+    }
+    if env_cfg.chunk_range.is_some() {
+        cfg.chunk_range = env_cfg.chunk_range;
+    }
+    if env_cfg.threads.is_some() {
+        cfg.threads = env_cfg.threads;
+    }
+    if env_cfg.dry_run {
+        cfg.dry_run = true;
+    }
+    if env_cfg.store_paths {
+        cfg.store_paths = true;
+    }
+    if env_cfg.log_level.is_some() {
+        cfg.log_level = env_cfg.log_level;
+    }
 
     // Init logging and thread pool
     logging::init(cfg.log_level.as_deref());
     if let Some(n) = cfg.threads {
-        let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global();
     }
 
     // Resolve DB paths
@@ -153,18 +171,27 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
         ClusterCommand::Exec { resume, force } => {
             let mut out = db::open_rw(&out_path)?;
             let tiles = db::open_ro(&tiles_path)?;
-            let _ = executor::run_pipeline(&tiles, &mut out, &cfg, executor::ExecOptions { resume, force })?;
+            let _ = executor::run_pipeline(
+                &tiles,
+                &mut out,
+                &cfg,
+                executor::ExecOptions { resume, force },
+            )?;
             Ok(())
         }
     }
 }
 
-fn parse_chunk_range_cli(s: &str) -> Option<(i32,i32,i32,i32)> {
+fn parse_chunk_range_cli(s: &str) -> Option<(i32, i32, i32, i32)> {
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 { return None; }
+    if parts.len() != 2 {
+        return None;
+    }
     let x = parts[0].split(':').collect::<Vec<_>>();
     let z = parts[1].split(':').collect::<Vec<_>>();
-    if x.len() != 2 || z.len() != 2 { return None; }
+    if x.len() != 2 || z.len() != 2 {
+        return None;
+    }
     let x_min = x[0].trim().parse::<i32>().ok()?;
     let x_max = x[1].trim().parse::<i32>().ok()?;
     let z_min = z[0].trim().parse::<i32>().ok()?;

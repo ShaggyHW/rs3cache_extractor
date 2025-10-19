@@ -14,7 +14,7 @@ pub struct TeleportStats {
 
 // Phase A: ensure teleport entrances exist (before Intra)
 pub fn ensure_teleport_entrances(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<TeleportStats> {
-    ensure_schema(out_db)?;
+    //ensure_schema(out_db)?;
 
     // Cache label maps per (plane,cx,cz)
     let mut label_cache: BTreeMap<(i32,i32,i32), HashMap<(i32,i32), i64>> = BTreeMap::new();
@@ -153,7 +153,7 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
 
             // Prepared statements
             let mut q_edge = tx.prepare(
-                "SELECT src_x, src_y, src_plane, dst_x, dst_y, dst_plane, cost FROM abstract_teleport_edges WHERE edge_id=?1"
+                "SELECT kind, src_x, src_y, src_plane, dst_x, dst_y, dst_plane, cost FROM abstract_teleport_edges WHERE edge_id=?1"
             )?;
             let mut ins = tx.prepare(
                 "INSERT INTO cluster_interconnections (entrance_from, entrance_to, cost)
@@ -164,12 +164,12 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
 
             for (edge_id, entries) in by_edge.iter() {
                 // Get abstract edge to know src/dst coords
-                let row: Option<(Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,i64)> = q_edge
+                let row: Option<(String, Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,i64)> = q_edge
                     .query_row(params![edge_id], |r| Ok((
-                        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
+                        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?,
                     )))
                     .optional()?;
-                let Some((sx,sy,spl, dx,dy,dpl, cost)) = row else { continue }; // skip if missing
+                let Some((kind, sx,sy,spl, dx,dy,dpl, cost)) = row else { continue }; // skip if missing
                 // Find entrance ids matching src and dst
                 let mut src_eid: Option<i64> = None;
                 let mut dst_eid: Option<i64> = None;
@@ -185,6 +185,11 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
                 if let (Some(from), Some(to)) = (src_eid, dst_eid) {
                     ins.execute(params![from, to, cost])?;
                     created += 1;
+                    // Doors are bidirectional; others remain one-way
+                    if kind == "door" {
+                        ins.execute(params![to, from, cost])?;
+                        created += 1;
+                    }
                 }
             }
             Ok(())
@@ -193,19 +198,21 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
         // Dry-run: approximate number of edges that would be created (those with both endpoints present)
         let conn = out_db;
         let mut q_edge = conn.prepare(
-            "SELECT src_x, src_y, src_plane, dst_x, dst_y, dst_plane FROM abstract_teleport_edges WHERE edge_id=?1"
+            "SELECT kind, src_x, src_y, src_plane, dst_x, dst_y, dst_plane FROM abstract_teleport_edges WHERE edge_id=?1"
         )?;
         for (edge_id, entries) in by_edge.iter() {
-            let row: Option<(Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>)> = q_edge
-                .query_row(params![edge_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))
+            let row: Option<(String, Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>)> = q_edge
+                .query_row(params![edge_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))
                 .optional()?;
-            if let Some((sx,sy,spl, dx,dy,dpl)) = row {
+            if let Some((kind, sx,sy,spl, dx,dy,dpl)) = row {
                 let mut has_src = false; let mut has_dst = false;
                 for (_eid, x, y, pl) in entries.iter().copied() {
                     if let (Some(sx), Some(sy), Some(spl)) = (sx,sy,spl) { if x==sx && y==sy && pl==spl { has_src = true; } }
                     if let (Some(dx), Some(dy), Some(dpl)) = (dx,dy,dpl) { if x==dx && y==dy && pl==dpl { has_dst = true; } }
                 }
-                if has_src && has_dst { created += 1; }
+                if has_src && has_dst {
+                    created += if kind == "door" { 2 } else { 1 };
+                }
             }
         }
     }
