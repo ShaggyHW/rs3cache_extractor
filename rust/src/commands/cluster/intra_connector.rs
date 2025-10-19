@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::config::Config;
 use super::db::{with_tx};
@@ -18,57 +18,63 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
 
     let mut stats = IntraStats::default();
 
-    // Collect clusters that have at least 2 entrances, joined with chunk coordinates
-    let mut clusters: Vec<(i64,i32,i32,i32)> = Vec::new();
+    // Collect clusters that have at least 2 entrances
+    let mut clusters: Vec<(i64,i32)> = Vec::new();
     {
         let mut q = out_db.prepare(
-            "SELECT cc.cluster_id, cc.chunk_x, cc.chunk_z, cc.plane, COUNT(ce.entrance_id) AS ecnt
-             FROM chunk_clusters cc
-             JOIN cluster_entrances ce ON ce.cluster_id = cc.cluster_id
-             GROUP BY cc.cluster_id, cc.chunk_x, cc.chunk_z, cc.plane
+            "SELECT c.cluster_id, c.plane, COUNT(ce.entrance_id) AS ecnt
+             FROM clusters c
+             JOIN cluster_entrances ce ON ce.cluster_id = c.cluster_id
+             GROUP BY c.cluster_id, c.plane
              HAVING ecnt >= 2"
         )?;
         let rows = q.query_map([], |row| {
             let cluster_id: i64 = row.get(0)?;
-            let chunk_x: i32 = row.get(1)?;
-            let chunk_z: i32 = row.get(2)?;
-            let plane: i32 = row.get(3)?;
-            Ok((cluster_id, chunk_x, chunk_z, plane))
+            let plane: i32 = row.get(1)?;
+            Ok((cluster_id, plane))
         })?;
         for r in rows { clusters.push(r?); }
     }
 
-    // Filter by cfg
-    clusters.retain(|&(_cid, cx, cz, plane)| {
+    // Filter by cfg (by plane only here; range filtering is applied per-entrance later)
+    clusters.retain(|&(_cid, plane)| {
         if let Some(planes) = &cfg.planes { if !planes.contains(&plane) { return false; } }
-        if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range { if cx < xmin || cx > xmax || cz < zmin || cz > zmax { return false; } }
         true
     });
 
     // Deterministic order
     clusters.sort_unstable();
 
+    println!("intra: found {} clusters with >=2 entrances", clusters.len());
+
     // Movement and costs
     let policy = MovementPolicy::default();
     let offsets = policy.neighbor_offsets();
     let (cost_card, cost_diag) = load_movement_costs(out_db)?;
+    println!(
+        "intra: movement costs loaded -> straight={} diagonal={}",
+        cost_card, cost_diag
+    );
 
-    // Track chunks we have cleared to avoid repeated deletes
-    let mut cleared_scopes: BTreeSet<(i32,i32,i32)> = BTreeSet::new();
-
-    // Compute and cache label maps per (plane, cx, cz)
-    let mut label_cache: BTreeMap<(i32,i32,i32), HashMap<(i32,i32), i64>> = BTreeMap::new();
+    // Track clusters we have cleared to avoid repeated deletes
+    let mut cleared_clusters: BTreeSet<i64> = BTreeSet::new();
 
     if !cfg.dry_run {
+        println!("intra: starting database transaction for intra edge generation");
         with_tx(out_db, |tx| {
-            for (cluster_id, cx, cz, plane) in clusters.iter().copied() {
-                if !cleared_scopes.contains(&(cx,cz,plane)) {
-                    tx.execute("DELETE FROM cluster_intraconnections WHERE chunk_x_from=?1 AND chunk_z_from=?2 AND plane_from=?3",
-                        params![cx, cz, plane])?;
-                    cleared_scopes.insert((cx,cz,plane));
+            for (cluster_id, plane) in clusters.iter().copied() {
+                println!("intra: processing cluster {} on plane {}", cluster_id, plane);
+                if !cleared_clusters.contains(&cluster_id) {
+                    println!("intra: clearing existing intraconnections for cluster {}", cluster_id);
+                    tx.execute(
+                        "DELETE FROM cluster_intraconnections \
+                         WHERE entrance_from IN (SELECT entrance_id FROM cluster_entrances WHERE cluster_id=?1)",
+                        params![cluster_id],
+                    )?;
+                    cleared_clusters.insert(cluster_id);
                 }
 
-                // Get entrances for this cluster
+                // Get entrances for this cluster (filter by chunk range if provided)
                 let mut es = tx.prepare(
                     "SELECT entrance_id, x, y FROM cluster_entrances WHERE cluster_id=?1 ORDER BY entrance_id"
                 )?;
@@ -80,145 +86,154 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
                 })?;
                 let mut entrances: Vec<(i64,i32,i32)> = Vec::new();
                 for r in erows { entrances.push(r?); }
-                if entrances.len() < 2 { continue; }
+                println!(
+                    "intra: cluster {} has {} entrances",
+                    cluster_id,
+                    entrances.len()
+                );
+                if entrances.len() < 2 {
+                    println!("intra: skipping cluster {} (needs >=2 entrances)", cluster_id);
+                    continue;
+                }
 
-                // Get label map for the chunk
-                let lbl = ensure_labels(tiles_db, &mut label_cache, plane, cx, cz, &policy)?;
+                // Optional chunk-range filter: keep cluster only if at least one entrance lies within range
+                if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range {
+                    if !entrances.iter().any(|&(_eid, x, y)| {
+                        let cx = x >> 6; let cz = y >> 6; cx >= xmin && cx <= xmax && cz >= zmin && cz <= zmax
+                    }) {
+                        println!(
+                            "intra: skipping cluster {} (no entrances within configured chunk range)",
+                            cluster_id
+                        );
+                        continue;
+                    }
+                }
+
+                // Load cluster tile set
+                let tile_set = load_cluster_tiles(&tx, cluster_id, plane)?;
+                println!(
+                    "intra: cluster {} tile set size = {}",
+                    cluster_id,
+                    tile_set.len()
+                );
 
                 // Quick membership check for entrances
-                if !entrances.iter().all(|&(_eid, x, y)| lbl.get(&(x,y)) == Some(&cluster_id)) {
-                    // If any entrance isn't in this cluster's label set, skip
+                if !entrances.iter().all(|&(_eid, x, y)| tile_set.contains(&(x,y))) {
+                    println!("intra: skipping cluster {} (entrance outside cluster tiles)", cluster_id);
                     continue;
                 }
 
                 // Pre-prepare insert statement
                 let mut ins = tx.prepare(
-                    "INSERT INTO cluster_intraconnections (
-                        chunk_x_from, chunk_z_from, plane_from, entrance_from, entrance_to, cost, path_blob
-                    ) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+                    "INSERT INTO cluster_intraconnections (entrance_from, entrance_to, cost, path_blob)
+                     VALUES (?1,?2,?3,?4)
+                     ON CONFLICT(entrance_from, entrance_to)
+                     DO UPDATE SET cost = MIN(cluster_intraconnections.cost, excluded.cost),
+                                   path_blob = COALESCE(cluster_intraconnections.path_blob, excluded.path_blob)"
                 )?;
 
                 // Compute all-pairs shortest paths between entrances deterministically
+                let mut cluster_edge_count = 0usize;
                 for i in 0..entrances.len() {
                     for j in 0..entrances.len() {
                         if i == j { continue; }
                         let (eid_a, ax, ay) = entrances[i];
                         let (eid_b, bx, by) = entrances[j];
                         // Deterministic ordering via indices already
-                        let (cost, path_opt) = shortest_path((ax,ay), (bx,by), &lbl, offsets, cost_card, cost_diag);
+                        println!(
+                            "intra: computing path cluster {} entrance {} -> {}",
+                            cluster_id,
+                            eid_a,
+                            eid_b
+                        );
+                        let (cost, path_opt) = shortest_path_in_set((ax,ay), (bx,by), &tile_set, offsets, cost_card, cost_diag);
                         if let Some(total) = cost {
                             let blob = if cfg.store_paths { path_opt.map(encode_path_blob) } else { None };
-                            println!("Intra");
-                            println!("{} {} {} {} {} {}", cx, cz, plane, eid_a, eid_b, total);
-                            ins.execute(params![cx, cz, plane, eid_a, eid_b, total as i64, blob])?;
+                            ins.execute(params![eid_a, eid_b, total as i64, blob])?;
+                            println!(
+                                "intra: stored intra edge {} -> {} cost={} (blob={})",
+                                eid_a,
+                                eid_b,
+                                total,
+                                blob.as_ref().map(|b| b.len()).unwrap_or(0)
+                            );
                             stats.edges_created += 1;
+                            cluster_edge_count += 1;
+                        } else {
+                            println!(
+                                "intra: no path found within cluster {} from entrance {} to {}",
+                                cluster_id,
+                                eid_a,
+                                eid_b
+                            );
                         }
                     }
                 }
 
+                println!(
+                    "intra: completed cluster {} -> {} intra edges inserted",
+                    cluster_id,
+                    cluster_edge_count
+                );
                 stats.clusters_processed += 1;
             }
+            println!(
+                "intra: transaction complete -> clusters_processed={} cumulative_edges={}",
+                stats.clusters_processed,
+                stats.edges_created
+            );
             Ok(())
         })?;
+    } else {
+        println!("intra: dry_run enabled - skipping database writes");
     }
 
+    println!(
+        "intra: build complete (dry_run={}) -> clusters_processed={} edges_created={}",
+        cfg.dry_run,
+        stats.clusters_processed,
+        stats.edges_created
+    );
     Ok(stats)
 }
 
-fn ensure_labels(
-    tiles_db: &Connection,
-    cache: &mut BTreeMap<(i32,i32,i32), HashMap<(i32,i32), i64>>,
-    plane: i32,
-    cx: i32,
-    cz: i32,
-    policy: &MovementPolicy,
-) -> Result<HashMap<(i32,i32), i64>> {
-    if let Some(m) = cache.get(&(plane,cx,cz)) { return Ok(m.clone()); }
-    let m = compute_labels_for_chunk(tiles_db, plane, cx, cz, policy)?;
-    cache.insert((plane,cx,cz), m.clone());
-    Ok(m)
-}
-
-fn compute_labels_for_chunk(
-    tiles_db: &Connection,
-    plane: i32,
-    cx: i32,
-    cz: i32,
-    policy: &MovementPolicy,
-) -> Result<HashMap<(i32,i32), i64>> {
-    use rusqlite::params;
-    use std::collections::VecDeque;
-
-    // Load walkable tiles in chunk
-    let mut tiles_stmt = tiles_db.prepare(
-        "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1 AND chunk_x=?2 AND chunk_z=?3",
+fn load_cluster_tiles(tx: &rusqlite::Transaction<'_>, cluster_id: i64, plane: i32) -> Result<HashSet<(i32,i32)>> {
+    let mut tiles_stmt = tx.prepare(
+        "SELECT x, y FROM cluster_tiles WHERE cluster_id=?1 AND plane=?2",
     )?;
-    let rows = tiles_stmt.query_map(params![plane, cx, cz], |row| {
+    let rows = tiles_stmt.query_map(params![cluster_id, plane], |row| {
         let x: i32 = row.get(0)?;
         let y: i32 = row.get(1)?;
         Ok((x,y))
     })?;
-    let mut walkable: HashSet<(i32,i32)> = HashSet::new();
-    for r in rows { walkable.insert(r?); }
-
-    // BFS components
-    let mut comps: Vec<Vec<(i32,i32)>> = Vec::new();
-    let mut visited: HashSet<(i32,i32)> = HashSet::new();
-    let offsets = policy.neighbor_offsets();
-    let mut q: VecDeque<(i32,i32)> = VecDeque::new();
-    for &start in walkable.iter() {
-        if visited.contains(&start) { continue; }
-        let mut comp: Vec<(i32,i32)> = Vec::new();
-        visited.insert(start);
-        q.push_back(start);
-        while let Some((sx,sy)) = q.pop_front() {
-            comp.push((sx,sy));
-            for &Offset(dx,dy) in offsets.iter() {
-                let nx = sx + dx;
-                let ny = sy + dy;
-                let n = (nx,ny);
-                if !visited.contains(&n) && walkable.contains(&n) {
-                    visited.insert(n);
-                    q.push_back(n);
-                }
-            }
-        }
-        comp.sort_unstable();
-        comps.push(comp);
-    }
-    comps.sort_by(|a,b| a.first().cmp(&b.first()).then(a.len().cmp(&b.len())));
-
-    // Build tile->cluster_id map using deterministic id scheme
-    let mut map: HashMap<(i32,i32), i64> = HashMap::new();
-    for (idx, comp) in comps.iter().enumerate() {
-        let local_index = idx as i64;
-        let cid = deterministic_cluster_id(plane as i64, cx as i64, cz as i64, local_index);
-        for &(x,y) in comp.iter() {
-            map.insert((x,y), cid);
-        }
-    }
-    Ok(map)
+    let mut set: HashSet<(i32,i32)> = HashSet::new();
+    for r in rows { set.insert(r?); }
+    Ok(set)
 }
 
 fn load_movement_costs(db: &Connection) -> Result<(i64,i64)> {
-    let straight: String = db.query_row("SELECT value FROM meta WHERE key='movement_cost_straight'", [], |r| r.get(0))?;
-    let diagonal: String = db.query_row("SELECT value FROM meta WHERE key='movement_cost_diagonal'", [], |r| r.get(0))?;
-    let sc = straight.parse::<i64>().unwrap_or(1024);
-    let dc = diagonal.parse::<i64>().unwrap_or(1448);
+    use rusqlite::OptionalExtension;
+    let straight: Option<String> = db
+        .query_row("SELECT value FROM meta WHERE key='movement_cost_straight'", [], |r| r.get(0))
+        .optional()?;
+    let diagonal: Option<String> = db
+        .query_row("SELECT value FROM meta WHERE key='movement_cost_diagonal'", [], |r| r.get(0))
+        .optional()?;
+    let sc = straight.and_then(|s| s.parse::<i64>().ok()).unwrap_or(600);
+    let dc = diagonal.and_then(|s| s.parse::<i64>().ok()).unwrap_or(600);
     Ok((sc, dc))
 }
 
-fn shortest_path(
+fn shortest_path_in_set(
     start: (i32,i32),
     goal: (i32,i32),
-    label_map: &HashMap<(i32,i32), i64>,
+    tiles: &HashSet<(i32,i32)>,
     offsets: &[Offset],
     cost_card: i64,
     cost_diag: i64,
 ) -> (Option<i64>, Option<Vec<(i32,i32)>>) {
     if start == goal { return (Some(0), Some(vec![start])); }
-    let cid = match label_map.get(&start) { Some(c) => *c, None => return (None, None) };
-    if label_map.get(&goal) != Some(&cid) { return (None, None); }
+    if !tiles.contains(&start) || !tiles.contains(&goal) { return (None, None); }
 
     // Dijkstra with deterministic tie-breaking using BTreeMap frontier keyed by (cost, x, y)
     let mut frontier: BTreeSet<(i64, i32, i32)> = BTreeSet::new();
@@ -234,7 +249,7 @@ fn shortest_path(
         for &Offset(dx,dy) in offsets.iter() {
             let nx = x + dx; let ny = y + dy;
             let n = (nx,ny);
-            if label_map.get(&n) != Some(&cid) { continue; }
+            if !tiles.contains(&n) { continue; }
             let step = if dx == 0 || dy == 0 { cost_card } else { cost_diag };
             let nd = d + step;
             match dist.get(&n) {
@@ -283,13 +298,7 @@ fn encode_path_blob(path: Vec<(i32,i32)>) -> Vec<u8> {
     out
 }
 
-fn deterministic_cluster_id(plane: i64, chunk_x: i64, chunk_z: i64, local_index: i64) -> i64 {
-    let p  = (plane & 0xF) << 60;
-    let cx = (chunk_x & 0xFFFFFF) << 36;
-    let cz = (chunk_z & 0xFFFFFF) << 12;
-    let li = (local_index & 0xFFF);
-    p | cx | cz | li
-}
+// deterministic_cluster_id no longer needed with explicit cluster IDs in DB
 
 #[cfg(test)]
 mod tests {
@@ -304,24 +313,19 @@ mod tests {
         crate::db::create_tables(&mut tiles)?;
         crate::db::create_tables(&mut out)?;
 
-        tiles.execute("INSERT INTO chunks(chunk_x, chunk_z, chunk_size, tile_count) VALUES (0,0,64,0)", [])?;
-        out.execute("INSERT INTO chunks(chunk_x, chunk_z, chunk_size, tile_count) VALUES (0,0,64,0)", [])?;
+        // A 2-tile line, plane=0
+        tiles.execute("INSERT INTO tiles(x,y,plane,flag,blocked,walk_mask,blocked_mask,walk_data) VALUES (0,0,0,0,0,1,0,'')", [])?;
+        tiles.execute("INSERT INTO tiles(x,y,plane,flag,blocked,walk_mask,blocked_mask,walk_data) VALUES (1,0,0,0,0,1,0,'')", [])?;
 
-        // A 2-tile line inside one chunk (0,0), plane=0
-        tiles.execute("INSERT INTO tiles(x,y,plane,chunk_x,chunk_z,flag,blocked,walk_mask,blocked_mask,walk_data) VALUES (0,0,0,0,0,0,0,0,0,'')", [])?;
-        tiles.execute("INSERT INTO tiles(x,y,plane,chunk_x,chunk_z,flag,blocked,walk_mask,blocked_mask,walk_data) VALUES (1,0,0,0,0,0,0,0,0,'')", [])?;
-
-        // Build clusters to get cluster_id
-        let cfg = Config::default();
-        // Use a minimal builder to compute cluster_id
-        let lbl = super::compute_labels_for_chunk(&tiles, 0, 0, 0, &MovementPolicy::default())?;
-        let cid = *lbl.get(&(0,0)).unwrap();
-
-        // Insert two entrances at the two tiles
-        out.execute("INSERT INTO chunk_clusters(cluster_id, chunk_x, chunk_z, plane, label, tile_count) VALUES (?1,0,0,0,0,2)", params![cid])?;
+        // Create a cluster with two tiles and two entrances
+        let cid: i64 = 1;
+        out.execute("INSERT INTO clusters(cluster_id, plane, label, tile_count) VALUES (?1,0,0,2)", params![cid])?;
+        out.execute("INSERT INTO cluster_tiles(cluster_id, x, y, plane) VALUES (?1,0,0,0)", params![cid])?;
+        out.execute("INSERT INTO cluster_tiles(cluster_id, x, y, plane) VALUES (?1,1,0,0)", params![cid])?;
         out.execute("INSERT INTO cluster_entrances(cluster_id, x, y, plane, neighbor_dir) VALUES (?1,0,0,0,'E')", params![cid])?;
         out.execute("INSERT INTO cluster_entrances(cluster_id, x, y, plane, neighbor_dir) VALUES (?1,1,0,0,'W')", params![cid])?;
 
+        let cfg = Config::default();
         Ok((tiles, out, cfg, (cid, (0,0), (1,0))))
     }
 
