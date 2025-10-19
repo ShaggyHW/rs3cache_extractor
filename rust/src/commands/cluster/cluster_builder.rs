@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use super::config::Config;
 use super::db::{ensure_schema, with_tx};
@@ -17,156 +17,149 @@ pub fn build_clusters(
     out_db: &mut Connection,
     cfg: &Config,
 ) -> Result<BuildStats> {
-    ensure_schema(out_db)?;
+    // ensure_schema(out_db)?;
 
     let mut stats = BuildStats::default();
+    println!("Starting cluster build");
 
-    // Collect distinct (chunk_x, chunk_z, plane) candidates from tiles
-    let mut stmt =
-        tiles_db.prepare("SELECT DISTINCT chunk_x, chunk_z, plane FROM tiles WHERE blocked = 0")?;
-    let rows = stmt.query_map([], |row| {
-        let cx: i32 = row.get(0)?;
-        let cz: i32 = row.get(1)?;
-        let plane: i32 = row.get(2)?;
-        Ok((cx, cz, plane))
-    })?;
+    // Determine planes to process
+    let planes: Vec<i32> = if let Some(p) = &cfg.planes {
+        p.clone()
+    } else {
+        let mut st = tiles_db.prepare("SELECT DISTINCT plane FROM tiles WHERE blocked=0")?;
+        let rows = st.query_map([], |r| r.get::<_, i32>(0))?;
+        let mut v: Vec<i32> = Vec::new();
+        for r in rows { v.push(r?); }
+        v.sort_unstable();
+        v
+    };
 
-    let mut candidates: Vec<(i32, i32, i32)> = Vec::new();
-    for r in rows {
-        let (cx, cz, pl) = r?;
-        candidates.push((cx, cz, pl));
-    }
-
-    // Apply filters from cfg
-    candidates.retain(|(cx, cz, plane)| {
-        if let Some(planes) = &cfg.planes {
-            if !planes.contains(&plane) {
-                return false;
-            }
-        }
-        if let Some((xmin, xmax, zmin, zmax)) = cfg.chunk_range {
-            if *cx < xmin || *cx > xmax || *cz < zmin || *cz > zmax {
-                return false;
-            }
-        }
-        true
-    });
-
-    // Sort deterministically
-    candidates.sort_unstable();
-
-    // Movement policy (defaults; tune later to match Python exactly)
+    // Movement policy
     let policy = MovementPolicy::default();
     let offsets = policy.neighbor_offsets();
 
-    for (chunk_x, chunk_z, plane) in candidates.into_iter() {
-        // Load walkable tile coordinates for this chunk+plane
+    // Prepare statements reused across planes
+    let mut is_walk_stmt = tiles_db.prepare(
+        "SELECT blocked, walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
+    )?;
+    let mut walk_data_stmt = tiles_db.prepare(
+        "SELECT walk_data FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
+    )?;
+
+    for plane in planes.into_iter() {
+        // Load all walkable tiles for this plane
         let mut tiles_stmt = tiles_db.prepare(
-            "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1 AND chunk_x=?2 AND chunk_z=?3",
+            "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1",
         )?;
-        let tile_rows = tiles_stmt.query_map(params![plane, chunk_x, chunk_z], |row| {
+        let rows = tiles_stmt.query_map(params![plane], |row| {
             let x: i32 = row.get(0)?;
             let y: i32 = row.get(1)?;
             Ok((x, y))
         })?;
         let mut walkable: HashSet<(i32, i32)> = HashSet::new();
-        for r in tile_rows {
-            walkable.insert(r?);
-        }
+        for r in rows { walkable.insert(r?); }
         if walkable.is_empty() {
+            println!("Plane {plane} has no walkable tiles, skipping");
             continue;
         }
 
-        // Prepare statements for walkability and edge checks in this scope
-        let mut is_walk_stmt = tiles_db.prepare(
-            "SELECT blocked, walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
-        )?;
-        let mut walk_data_stmt = tiles_db.prepare(
-            "SELECT walk_data FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
-        )?;
+        println!("Processing plane {plane} with {} walkable tiles", walkable.len());
 
-        // Connected components using BFS
-        let mut components: Vec<Vec<(i32, i32)>> = Vec::new();
-        let mut visited: HashSet<(i32, i32)> = HashSet::new();
-        for &start in walkable.iter() {
-            if visited.contains(&start) {
-                continue;
-            }
-            let mut comp: Vec<(i32, i32)> = Vec::new();
-            let mut q: VecDeque<(i32, i32)> = VecDeque::new();
+        // Seeds: lexicographically sorted to prefer (0,0) if present
+        let mut seeds: Vec<(i32,i32)> = walkable.iter().cloned().collect();
+        seeds.sort_unstable();
+
+        let mut components: Vec<Vec<(i32,i32)>> = Vec::new();
+        let mut visited: HashSet<(i32,i32)> = HashSet::new();
+
+        for start in seeds.into_iter() {
+            if visited.contains(&start) { continue; }
+            println!("Processing seed {start:?}");
+
+            // BFS with 64x64 bounding box limit
+            let mut comp: Vec<(i32,i32)> = Vec::new();
+            let mut q: VecDeque<(i32,i32)> = VecDeque::new();
+            let (mut min_x, mut max_x) = (start.0, start.0);
+            let (mut min_y, mut max_y) = (start.1, start.1);
             visited.insert(start);
             q.push_back(start);
+
             while let Some((sx, sy)) = q.pop_front() {
                 comp.push((sx, sy));
                 for &Offset(dx, dy) in offsets.iter() {
                     let nx = sx + dx;
                     let ny = sy + dy;
                     let n = (nx, ny);
-                    if !visited.contains(&n) && walkable.contains(&n) {
-                        if !can_step(&mut is_walk_stmt, &mut walk_data_stmt, &policy, sx, sy, nx, ny, plane)? {
-                            continue;
-                        }
-                        visited.insert(n);
-                        q.push_back(n);
-                    }
+                    if visited.contains(&n) { continue; }
+                    if !walkable.contains(&n) { continue; }
+                    if !can_step(&mut is_walk_stmt, &mut walk_data_stmt, &policy, sx, sy, nx, ny, plane)? { continue; }
+
+                    // Check bounding box constraint (max size 64x64)
+                    let new_min_x = min_x.min(nx);
+                    let new_max_x = max_x.max(nx);
+                    let new_min_y = min_y.min(ny);
+                    let new_max_y = max_y.max(ny);
+                    let width = (new_max_x - new_min_x + 1).abs() as i32;
+                    let height = (new_max_y - new_min_y + 1).abs() as i32;
+                    if width > 64 || height > 64 { continue; }
+
+                    // Accept
+                    min_x = new_min_x; max_x = new_max_x;
+                    min_y = new_min_y; max_y = new_max_y;
+                    visited.insert(n);
+                    q.push_back(n);
                 }
-                
             }
-            // Stable order within component
+
             comp.sort_unstable();
+            println!("Component {comp:?}");
             components.push(comp);
         }
 
-        // Deterministic ordering of components: by first tile, then length
-        components.sort_by(|a, b| a.first().cmp(&b.first()).then(a.len().cmp(&b.len())));
+        println!("Plane {plane} has {} components", components.len());
 
-        // Write to output DB in a transaction
+        // Deterministic ordering: by first tile then length
+        components.sort_by(|a,b| a.first().cmp(&b.first()).then(a.len().cmp(&b.len())));
+
+        
         let comps_len = components.len();
         if !cfg.dry_run {
+            println!("Inserting {} clusters for plane {}", comps_len, plane);
             with_tx(out_db, |tx| {
-                // Idempotence: clear prior rows for this scope
-                tx.execute(
-                    "DELETE FROM cluster_tiles WHERE cluster_id IN (
-                        SELECT cluster_id FROM chunk_clusters WHERE chunk_x=?1 AND chunk_z=?2 AND plane=?3
-                    )",
-                    params![chunk_x, chunk_z, plane],
+                // Clear existing clusters on this plane (idempotent rebuild per plane)
+                let mut sel_ids = tx.prepare(
+                    "SELECT cluster_id FROM clusters WHERE plane=?1",
                 )?;
-                tx.execute(
-                    "DELETE FROM chunk_clusters WHERE chunk_x=?1 AND chunk_z=?2 AND plane=?3",
-                    params![chunk_x, chunk_z, plane],
-                )?;
+                let rows = sel_ids.query_map(params![plane], |r| r.get::<_, i64>(0))?;
+                let mut to_del: BTreeSet<i64> = BTreeSet::new();
+                for r in rows { to_del.insert(r?); }
+                drop(sel_ids);
+
+                if !to_del.is_empty() {
+                    let mut del_tiles = tx.prepare("DELETE FROM cluster_tiles WHERE cluster_id=?1")?;
+                    let mut del_clusters = tx.prepare("DELETE FROM clusters WHERE cluster_id=?1")?;
+                    for cid in to_del.iter() {
+                        del_tiles.execute(params![cid])?;
+                        del_clusters.execute(params![cid])?;
+                    }
+                }
 
                 let mut insert_cluster = tx.prepare(
-                    "INSERT INTO chunk_clusters (cluster_id, chunk_x, chunk_z, plane, label, tile_count) VALUES (?1,?2,?3,?4,?5,?6)",
+                    "INSERT INTO clusters (cluster_id, plane, label, tile_count)
+                     VALUES (?1,?2,?3,?4)
+                     ON CONFLICT(cluster_id) DO UPDATE SET plane=excluded.plane, label=excluded.label, tile_count=excluded.tile_count",
                 )?;
                 let mut insert_tile = tx.prepare(
                     "INSERT INTO cluster_tiles (cluster_id, x, y, plane) VALUES (?1,?2,?3,?4)",
                 )?;
-                for (idx, comp) in components.iter().enumerate() {
-                    let local_index = idx as i64;
-                    println!(
-                        "Plane: {}, Chunk X: {}, Chunk Z: {}, Local Index: {}",
-                        plane, chunk_x, chunk_z, local_index
-                    );
-                    let cluster_id = deterministic_cluster_id(
-                        plane as i64,
-                        chunk_x as i64,
-                        chunk_z as i64,
-                        local_index,
-                    );
-                    println!("Cluster ID: {}", cluster_id);
-                    let tile_count = comp.len() as i64;
-                    println!("Tile Count: {}", tile_count);
 
-                    insert_cluster.execute(params![
-                        cluster_id,
-                        chunk_x,
-                        chunk_z,
-                        plane,
-                        local_index,
-                        tile_count
-                    ])?;
-                    // Persist tiles for this cluster
+                for (idx, comp) in components.iter().enumerate() {
+                    println!("Processing component {comp:?}");
+                    let local_index = idx as i64;
+                    let cluster_id = deterministic_cluster_id_plane(plane as i64, local_index);
+                    let tile_count = comp.len() as i64;
+
+                    insert_cluster.execute(params![cluster_id, plane, local_index, tile_count])?;
                     for &(tx_x, tx_y) in comp.iter() {
                         insert_tile.execute(params![cluster_id, tx_x, tx_y, plane])?;
                     }
@@ -175,21 +168,25 @@ pub fn build_clusters(
             })?;
         }
 
-        stats.chunks_processed += 1;
+        stats.chunks_processed += 1; // interpret as planes_processed
         stats.clusters_created += comps_len;
+        println!("Plane {plane} complete: {comps_len} clusters");
     }
+
+    println!(
+        "Cluster build complete: {} planes processed, {} clusters created",
+        stats.chunks_processed,
+        stats.clusters_created
+    );
 
     Ok(stats)
 }
 
-fn deterministic_cluster_id(plane: i64, chunk_x: i64, chunk_z: i64, local_index: i64) -> i64 {
-    // Construct a stable 64-bit identifier from inputs; simple mix to avoid collisions.
-    // Layout: [plane:4][chunk_x:24][chunk_z:24][local_index:12]
-    let p = (plane & 0xF) << 60;
-    let cx = (chunk_x & 0xFFFFFF) << 36;
-    let cz = (chunk_z & 0xFFFFFF) << 12;
-    let li = (local_index & 0xFFF);
-    p | cx | cz | li
+fn deterministic_cluster_id_plane(plane: i64, local_index: i64) -> i64 {
+    // Layout: [plane:8][local_index:56] — deterministic per plane
+    let p = (plane & 0xFF) << 56;
+    let li = local_index & 0x00FF_FFFF_FFFF_FFFF;
+    p | li
 }
 
 fn can_step(
@@ -274,8 +271,8 @@ fn can_cross_cardinal(stmt: &mut rusqlite::Statement<'_>, x: i32, y: i32, plane:
     let b = walk_flags(stmt, nx, ny, plane)?;
     let allow = |m: Option<bool>| m.unwrap_or(true);
     Ok(match d {
-        'N' => allow(a.get("bottom").copied()) && allow(b.get("top").copied()),
-        'S' => allow(a.get("top").copied()) && allow(b.get("bottom").copied()),
+        'N' => allow(a.get("top").copied()) && allow(b.get("bottom").copied()),
+        'S' => allow(a.get("bottom").copied()) && allow(b.get("top").copied()),
         'E' => allow(a.get("right").copied()) && allow(b.get("left").copied()),
         'W' => allow(a.get("left").copied()) && allow(b.get("right").copied()),
         _ => true,
