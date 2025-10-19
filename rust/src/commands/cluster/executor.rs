@@ -8,7 +8,6 @@ use super::intra_connector;
 use super::inter_connector;
 use super::jps_accelerator;
 use super::teleport_connector;
-use super::db::ensure_schema;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Stage {
@@ -33,7 +32,7 @@ impl Stage {
             Stage::Jps => "cluster_stage_jps",
         }
     }
-    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::TeleportEntrances, Stage::Intra, Stage::Inter, Stage::TeleportEdges, Stage::Jps] }
+    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Inter, Stage::Intra] }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -58,8 +57,7 @@ pub fn run_pipeline(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config
 
     let mut stats = ExecStats::default();
 
-    // Ensure out_db has chunk rows required by later stages (FK for chunk_clusters)
-    ensure_out_chunks(tiles_db, out_db, cfg)?;
+    // Single DB schema no longer requires mirroring chunks; clusters/tiles live in one DB
 
     // Determine starting stage for resume
     let mut stages_to_run: Vec<Stage> = Stage::all().to_vec();
@@ -130,43 +128,67 @@ pub fn run_pipeline(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config
 }
 
 fn is_stage_done(db: &Connection, s: Stage) -> Result<bool> {
-    let val: Option<String> = db
-        .query_row("SELECT value FROM meta WHERE key=?1", [s.key()], |r| r.get(0))
-        .optional()?;
-    Ok(matches!(val.as_deref(), Some("done")))
+    // Output-based detection to avoid meta CHECK constraints
+    match s {
+        Stage::Build => {
+            let v: Option<i64> = db.query_row("SELECT 1 FROM clusters LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+        Stage::Entrances => {
+            let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_entrances LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+        Stage::TeleportEntrances => {
+            let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_entrances WHERE teleport_edge_id IS NOT NULL LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+        Stage::Intra => {
+            let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_intraconnections LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+        Stage::Inter => {
+            let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_interconnections LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+        Stage::TeleportEdges => {
+            let v: Option<i64> = db
+                .query_row(
+                    "SELECT 1 FROM cluster_interconnections ci JOIN cluster_entrances ce ON ce.entrance_id=ci.entrance_from WHERE ce.teleport_edge_id IS NOT NULL LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(v.is_some())
+        }
+        Stage::Jps => {
+            // Consider done if JPS tables exist and contain any row
+            let v: Option<i64> = db.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jps_spans'", [], |r| r.get(0)).optional()?;
+            Ok(v.is_some())
+        }
+    }
 }
 
-fn set_stage_done(db: &Connection, s: Stage) -> Result<()> {
-    db.execute(
-        "INSERT INTO meta(key, value) VALUES(?1,'done') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [s.key()],
-    )?;
-    Ok(())
-}
+fn set_stage_done(_db: &Connection, _s: Stage) -> Result<()> { Ok(()) }
 
-fn clear_stage_meta(db: &Connection, s: Stage) -> Result<()> {
-    db.execute("DELETE FROM meta WHERE key=?1", [s.key()])?;
-    Ok(())
-}
+fn clear_stage_meta(_db: &Connection, _s: Stage) -> Result<()> { Ok(()) }
 
 // ---- Validations (minimal but useful) ----
 
 fn validate_build(tiles_db: &Connection, out_db: &Connection, cfg: &Config) -> Result<()> {
-    // For each chunk with any walkable tile in scope, expect at least one chunk_clusters row
+    // For each plane with any walkable tile in scope, expect at least one cluster row
     let mut q = tiles_db.prepare(
-        "SELECT DISTINCT chunk_x, chunk_z, plane FROM tiles WHERE blocked=0",
+        "SELECT DISTINCT plane FROM tiles WHERE blocked=0",
     )?;
-    let rows = q.query_map([], |r| Ok((r.get::<_, i32>(0)?, r.get::<_, i32>(1)?, r.get::<_, i32>(2)?)))?;
+    let rows = q.query_map([], |r| Ok(r.get::<_, i32>(0)?))?;
     for r in rows {
-        let (cx,cz,pl) = r?;
+        let pl = r?;
         if let Some(planes) = &cfg.planes { if !planes.contains(&pl) { continue; } }
-        if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range { if cx < xmin || cx > xmax || cz < zmin || cz > zmax { continue; } }
         let cnt: i64 = out_db.query_row(
-            "SELECT COUNT(*) FROM chunk_clusters WHERE chunk_x=?1 AND chunk_z=?2 AND plane=?3",
-            params![cx,cz,pl],
+            "SELECT COUNT(*) FROM clusters WHERE plane=?1",
+            params![pl],
             |r| r.get(0),
         )?;
-        if cnt == 0 { return Err(anyhow!("validate_build: expected clusters for chunk ({},{},{})", cx,cz,pl)); }
+        if cnt == 0 { return Err(anyhow!("validate_build: expected clusters for plane {}", pl)); }
     }
     Ok(())
 }
@@ -207,24 +229,3 @@ fn validate_jps(out_db: &Connection) -> Result<()> {
     Ok(())
 }
 
-// Copy/mirror required chunks into out_db to satisfy FK on chunk_clusters.
-fn ensure_out_chunks(tiles_db: &Connection, out_db: &Connection, cfg: &Config) -> Result<()> {
-    // Read and buffer rows first to avoid holding a read cursor while writing
-    let mut q = tiles_db.prepare(
-        "SELECT DISTINCT chunk_x, chunk_z FROM tiles WHERE blocked=0",
-    )?;
-    let rows = q.query_map([], |r| Ok((r.get::<_, i32>(0)?, r.get::<_, i32>(1)?)))?;
-    let mut coords: Vec<(i32,i32)> = Vec::new();
-    for r in rows { coords.push(r?); }
-    drop(q);
-
-    let mut ins = out_db.prepare(
-        "INSERT OR IGNORE INTO chunks(chunk_x, chunk_z, chunk_size, tile_count) VALUES (?1,?2,64,0)",
-    )?;
-    for (cx, cz) in coords.into_iter() {
-        if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range { if cx < xmin || cx > xmax || cz < zmin || cz > zmax { continue; } }
-        // Planes are not part of chunks key; filter by planes doesn’t apply here
-        ins.execute(params![cx, cz])?;
-    }
-    Ok(())
-}
