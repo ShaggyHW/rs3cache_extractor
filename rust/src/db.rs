@@ -83,39 +83,15 @@ CREATE TABLE cluster_tiles (
     PRIMARY KEY (cluster_id, x, y, plane)
 );
 
-CREATE TABLE jps_jump (
-    x INTEGER NOT NULL,
-    y INTEGER NOT NULL,
-    plane INTEGER NOT NULL,
-    dir INTEGER NOT NULL,
-    next_x INTEGER,
-    next_y INTEGER,
-    forced_mask INTEGER,
-    PRIMARY KEY (x, y, plane, dir)
-);
-
-CREATE TABLE jps_spans (
-    x INTEGER NOT NULL,
-    y INTEGER NOT NULL,
-    plane INTEGER NOT NULL,
-    left_block_at INTEGER,
-    right_block_at INTEGER,
-    up_block_at INTEGER,
-    down_block_at INTEGER,
-    PRIMARY KEY (x, y, plane)
-);
-
 CREATE TABLE meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+  key   TEXT PRIMARY KEY
+        CHECK (key IN (
+          'schema_version','tileset_version','map_build_at',
+          'generator_commit', 'coordinate_origin'
+        )),
+  value TEXT NOT NULL
 );
 
-CREATE TABLE movement_policy (
-    policy_id INTEGER PRIMARY KEY CHECK (policy_id = 1),
-    allow_diagonals INTEGER NOT NULL,
-    allow_corner_cut INTEGER NOT NULL,
-    unit_radius_tiles INTEGER NOT NULL
-);
 
 CREATE TABLE teleports_door_nodes (
     id INTEGER PRIMARY KEY,

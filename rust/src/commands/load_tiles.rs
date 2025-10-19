@@ -155,11 +155,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
         return Ok(());
     }
 
-    let (chunk_x, chunk_z, chunk_size) = if let Some(ch) = data.chunk {
-        (ch.x, ch.z, ch.chunk_size)
-    } else {
-        (None, None, None)
-    };
 
     // Send chunk meta first so writer can insert chunk row
     sender.send(FileBatch {
