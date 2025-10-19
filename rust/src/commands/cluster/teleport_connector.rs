@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::config::Config;
-use super::db::{ensure_schema, with_tx};
+use super::db::{with_tx};
 use super::neighbor_policy::{MovementPolicy, Offset};
 
 #[derive(Clone, Debug, Default)]
@@ -110,7 +110,7 @@ pub fn ensure_teleport_entrances(tiles_db: &Connection, out_db: &mut Connection,
 
 // Phase C: create teleport interconnections (after Inter)
 pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<TeleportStats> {
-    ensure_schema(out_db)?;
+    // ensure_schema(out_db)?;
 
     // Collect teleport entrances in scope
     let mut teleport_entrances: Vec<(i64,i64,i32,i32,i32)> = Vec::new(); // (entrance_id, teleport_edge_id, x, y, plane)
@@ -162,6 +162,36 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
                  DO UPDATE SET cost = MIN(cluster_interconnections.cost, excluded.cost)"
             )?;
 
+            let mut all_entrances_scoped: Vec<(i64, i64, i32, i32, i32)> = Vec::new(); // (eid, cluster_id, x, y, plane)
+            {
+                let mut qa = tx.prepare(
+                    "SELECT entrance_id, cluster_id, x, y, plane FROM cluster_entrances ORDER BY entrance_id"
+                )?;
+                let rows = qa.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+                for r in rows {
+                    let (eid, cid, x, y, plane): (i64,i64,i32,i32,i32) = r?;
+                    if let Some(planes) = &cfg.planes { if !planes.contains(&plane) { continue; } }
+                    if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range {
+                        let cx = x >> 6; let cz = y >> 6; if cx < xmin || cx > xmax || cz < zmin || cz > zmax { continue; }
+                    }
+                    all_entrances_scoped.push((eid, cid, x, y, plane));
+                }
+            }
+            {
+                let mut q_dst_eids = tx.prepare(
+                    "SELECT dst_entrance FROM abstract_teleport_edges WHERE src_entrance IS NULL AND dst_entrance IS NOT NULL"
+                )?;
+                let rows = q_dst_eids.query_map([], |r| r.get::<_, i64>(0))?;
+                let mut del = tx.prepare("DELETE FROM cluster_interconnections WHERE entrance_from=?1 AND entrance_to=?2")?;
+                for r in rows {
+                    let dst_eid: i64 = r?;
+                    for (from_eid, _cid, _x, _y, _pl) in all_entrances_scoped.iter().copied() {
+                        del.execute(params![from_eid, dst_eid])?;
+                    }
+                }
+            }
+            let mut q_dst_cluster = tx.prepare("SELECT cluster_id FROM cluster_entrances WHERE entrance_id=?1")?;
+
             for (edge_id, entries) in by_edge.iter() {
                 // Get abstract edge to know src/dst coords
                 let row: Option<(String, Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,Option<i32>,i64)> = q_edge
@@ -190,6 +220,7 @@ pub fn create_teleport_edges(out_db: &mut Connection, cfg: &Config) -> Result<Te
                         ins.execute(params![to, from, cost])?;
                         created += 1;
                     }
+                } else if src_eid.is_none() {
                 }
             }
             Ok(())
@@ -243,10 +274,12 @@ fn compute_labels_for_chunk(
 ) -> Result<HashMap<(i32,i32), i64>> {
     use std::collections::{HashSet, VecDeque};
     // Load walkable tiles in chunk
+    let x0 = cx * 64; let x1 = x0 + 63;
+    let y0 = cz * 64; let y1 = y0 + 63;
     let mut tiles_stmt = tiles_db.prepare(
-        "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1 AND chunk_x=?2 AND chunk_z=?3",
+        "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1 AND x BETWEEN ?2 AND ?3 AND y BETWEEN ?4 AND ?5",
     )?;
-    let rows = tiles_stmt.query_map(params![plane, cx, cz], |row| {
+    let rows = tiles_stmt.query_map(params![plane, x0, x1, y0, y1], |row| {
         let x: i32 = row.get(0)?;
         let y: i32 = row.get(1)?;
         Ok((x,y))

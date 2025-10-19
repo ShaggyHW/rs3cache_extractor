@@ -300,11 +300,21 @@ fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
 }
 
 fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
+    println!("Loading door links...");
     let door = get_door_links(conn)?;
+    println!("Loaded {} door link origins with {} total destinations", door.len(), door.values().map(|v| v.len()).sum::<usize>());
+    println!("Loading lodestones...");
     let (lode_set, lodestones) = get_lodestones(conn)?;
+    println!("Loaded {} lodestone destinations", lodestones.len());
+    println!("Loading object transitions...");
     let obj = get_object_transitions(conn)?;
+    println!("Loaded {} object transition origins with {} total destinations", obj.len(), obj.values().map(|v| v.len()).sum::<usize>());
+    println!("Loading NPC transitions...");
     let npc = get_npc_transitions(conn)?;
+    println!("Loaded {} NPC transition origins with {} total destinations", npc.len(), npc.values().map(|v| v.len()).sum::<usize>());
+    println!("Loading interface slot destinations...");
     let ifslot = get_ifslot_dest_tiles(conn)?;
+    println!("Loaded {} interface slot destinations", ifslot.len());
 
     let mut cache = WalkCache::new();
     let mut q: VecDeque<Tile> = VecDeque::new();
@@ -315,7 +325,14 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
 
     let mut ifslot_enqueued = false;
 
+    println!("Starting BFS from tile {:?}", start);
+    let mut processed = 0usize;
+
     while let Some(t) = q.pop_front() {
+        processed += 1;
+        if processed % 10000 == 0 {
+            println!("Processed {} tiles so far; queue length {}", processed, q.len());
+        }
         let rec = cache.get_reconciled(conn, t)?;
         for n in neighbors_from_reconciled(&rec, t) {
             if vis.insert(n) { q.push_back(n); }
@@ -347,6 +364,8 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
             ifslot_enqueued = true;
         }
     }
+
+    println!("Finished BFS; processed {} tiles with {} reachable tiles discovered", processed, vis.len());
 
     Ok(vis)
 }
@@ -422,6 +441,7 @@ fn create_tiles_and_insert(
     reachable: &HashSet<Tile>,
     cache: &mut WalkCache,
 ) -> Result<()> {
+    println!("Creating destination tiles table and inserting reachable tiles...");
     let create_sql = get_create_table_sql(src, "tiles")?;
     let cols = get_table_columns(src, "tiles")?;
     let placeholders = (0..cols.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
@@ -434,6 +454,7 @@ fn create_tiles_and_insert(
 
     {
         let mut insert_stmt = tx.prepare(&insert_sql)?;
+        let mut inserted = 0usize;
         for &t in reachable.iter() {
             if let Some(mut row) = get_tiles_row(src, &cols, t)? {
                 if let Some(idx) = walk_idx {
@@ -442,20 +463,29 @@ fn create_tiles_and_insert(
                     row[idx] = Value::Text(s);
                 }
                 insert_stmt.execute(params_from_iter(row.into_iter()))?;
+                inserted += 1;
+                if inserted % 5000 == 0 {
+                    println!("Inserted {} tiles so far...", inserted);
+                }
             }
         }
+        println!("Finished inserting {} tiles", inserted);
     }
 
     tx.commit()?;
+    println!("Committed tiles insertion transaction");
 
     let mut idx_stmt = src.prepare(
         "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='tiles' AND sql IS NOT NULL",
     )?;
     let mut rows = idx_stmt.query([])?;
+    let mut index_count = 0usize;
     while let Some(r) = rows.next()? {
         let sql: String = r.get(0)?;
         let _ = dst.execute(&sql, []);
+        index_count += 1;
     }
+    println!("Recreated {} tile indexes", index_count);
 
     Ok(())
 }
@@ -470,6 +500,7 @@ fn copy_tables(src: &Connection, dst: &mut Connection, skip: &HashSet<String>) -
 
     for t in table_names {
         if skip.contains(&t) { continue; }
+        println!("Copying table `{}`", t);
         let create_sql = match src.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
             [&t],
@@ -487,23 +518,33 @@ fn copy_tables(src: &Connection, dst: &mut Connection, skip: &HashSet<String>) -
         let mut ins = tx.prepare(&insert_sql)?;
         let mut sel = src.prepare(&select_sql)?;
         let mut rows = sel.query([])?;
+        let mut copied = 0usize;
         while let Some(r) = rows.next()? {
             let vals = read_row_values(r, cols.len())?;
             ins.execute(params_from_iter(vals.into_iter()))?;
+            copied += 1;
+            if copied % 5000 == 0 {
+                println!("  Copied {} rows into `{}`", copied, t);
+            }
         }
+        println!("  Finished copying {} rows into `{}`", copied, t);
         let mut idx_stmt = src.prepare(
             "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
         )?;
         let mut idx_rows = idx_stmt.query([&t])?;
+        let mut index_count = 0usize;
         while let Some(ir) = idx_rows.next()? {
             let sql: Option<String> = ir.get(0)?;
             if let Some(sql) = sql {
                 let _ = tx.execute(&sql, []);
+                index_count += 1;
             }
         }
+        println!("  Recreated {} indexes for `{}`", index_count, t);
     }
 
     tx.commit()?;
+    println!("Finished copying auxiliary tables");
     Ok(())
 }
 
@@ -515,22 +556,32 @@ fn copy_views(src: &Connection, dst: &mut Connection) -> Result<()> {
         let name: String = r.get(0)?;
         let sql: String = r.get(1)?;
         let _ = tx.execute(&sql, []);
-        let _ = name;
+        println!("Copied view `{}`", name);
     }
     tx.commit()?;
+    println!("Finished copying views");
     Ok(())
 }
 
 pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32, start_plane: i32) -> Result<()> {
+    println!("Starting tile cleaner from start tile ({}, {}, {})", start_x, start_y, start_plane);
     let src = Connection::open(src_db).with_context(|| format!("Open DB {}", src_db.display()))?;
+    println!("Opened source database {}", src_db.display());
     src.execute_batch("PRAGMA foreign_keys=ON;")?;
     let start: Tile = (start_x, start_y, start_plane);
+    println!("Computing reachable tiles...");
     let reachable = reachable_tiles(&src, start)?;
+    println!("Identified {} reachable tiles", reachable.len());
 
-    if out_db.exists() { let _ = fs::remove_file(out_db); }
+    if out_db.exists() {
+        println!("Removing existing output database {}", out_db.display());
+        let _ = fs::remove_file(out_db);
+    }
     let mut dst = Connection::open(out_db).with_context(|| format!("Create DB {}", out_db.display()))?;
+    println!("Opened destination database {}", out_db.display());
     // Match Python behavior: avoid FK errors while creating/inserting tiles before copying 'chunks'
     dst.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    println!("Disabled foreign key checks on destination");
 
     let mut cache = WalkCache::new();
     create_tiles_and_insert(&src, &mut dst, &reachable, &mut cache)?;
@@ -540,5 +591,6 @@ pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32
     copy_tables(&src, &mut dst, &skip)?;
     copy_views(&src, &mut dst)?;
 
+    println!("Tile cleaning complete; output written to {}", out_db.display());
     Ok(())
 }

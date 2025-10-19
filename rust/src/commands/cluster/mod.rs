@@ -54,6 +54,8 @@ pub enum ClusterCommand {
     /// Build inter-cluster connections across entrances
     #[command(name = "inter-connector")]
     InterConnector,
+
+    
     /// Build intra-cluster connections (optional path storage)
     #[command(name = "intra-connector")]
     IntraConnector,
@@ -160,6 +162,7 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
             let mut out = db::open_rw(&out_path)?;
             let tiles = db::open_ro(&tiles_path)?;
             let _ = inter_connector::build_inter_edges(&tiles, &mut out, &cfg)?;
+            let _ = teleport_connector::create_teleport_edges(&mut out, &cfg)?;
             Ok(())
         }
         ClusterCommand::JpsAccelerator => {

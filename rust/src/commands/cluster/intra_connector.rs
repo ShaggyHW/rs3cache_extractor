@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::config::Config;
-use super::db::{ensure_schema, with_tx};
+use super::db::{with_tx};
 use super::neighbor_policy::{MovementPolicy, Offset};
 
 #[derive(Clone, Debug, Default)]
@@ -14,7 +14,7 @@ pub struct IntraStats {
 }
 
 pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<IntraStats> {
-    ensure_schema(out_db)?;
+    // ensure_schema(out_db)?;
 
     let mut stats = IntraStats::default();
 

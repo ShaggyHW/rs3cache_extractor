@@ -11,6 +11,7 @@ cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.go
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 cargo run --manifest-path rust/Cargo.toml -- cluster build-clusters 
 cargo run --manifest-path rust/Cargo.toml -- cluster entrance-discovery 
+cargo run --manifest-path rust/Cargo.toml -- cluster inter-connector 
 
 
 
