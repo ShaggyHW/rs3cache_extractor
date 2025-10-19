@@ -186,11 +186,15 @@ pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String]
                 r#"
                 DELETE FROM abstract_teleport_edges;
                 INSERT INTO abstract_teleport_edges (
+                  kind, node_id,
                   src_x, src_y, src_plane,
                   dst_x, dst_y, dst_plane,
                   cost, requirement_id
                 )
-                SELECT src_x, src_y, src_plane, dst_x, dst_y, dst_plane, cost, requirement_id
+                SELECT kind, id,
+                       src_x, src_y, src_plane,
+                       dst_x, dst_y, dst_plane,
+                       cost, requirement_id
                 FROM teleports_all;
                 "#,
             )?;

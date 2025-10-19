@@ -97,26 +97,26 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
     // Drain messages as they arrive and commit per batch
     for batch in rx_msg {
         // Commit chunk row in its own mini-transaction when provided
-        if let (Some(cx), Some(cz)) = (batch.chunk_x, batch.chunk_z) {
-            if let Some(tile_count) = batch.tile_count {
-                let txc = conn.transaction()?;
-                txc.execute(
-                    "INSERT OR REPLACE INTO chunks (chunk_x, chunk_z, chunk_size, tile_count) VALUES (?, ?, ?, ?)",
-                    rusqlite::params![cx, cz, batch.chunk_size, tile_count],
-                )?;
-                txc.commit()?;
-            }
-        }
+        // if let (Some(cx), Some(cz)) = (batch.chunk_x, batch.chunk_z) {
+        //     if let Some(tile_count) = batch.tile_count {
+        //         let txc = conn.transaction()?;
+        //         txc.execute(
+        //             "INSERT OR REPLACE INTO chunks (chunk_x, chunk_z, chunk_size, tile_count) VALUES (?, ?, ?, ?)",
+        //             rusqlite::params![cx, cz, batch.chunk_size, tile_count],
+        //         )?;
+        //         txc.commit()?;
+        //     }
+        // }
 
         if !batch.tile_rows.is_empty() {
             let txw = conn.transaction()?;
             let mut tiles_stmt = txw.prepare(
-                "INSERT OR REPLACE INTO tiles (x, y, plane, chunk_x, chunk_z, flag, blocked, walk_mask, blocked_mask, walk_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO tiles (x, y, plane, flag, blocked, walk_mask, blocked_mask, walk_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             for row in batch.tile_rows {
-                let (x, y, plane, cx, cz, flag, blocked, walk_mask, blocked_mask, walk_data) = row;
+                let (x, y, plane,  flag, blocked, walk_mask, blocked_mask, walk_data) = row;
                 tiles_stmt.execute(rusqlite::params![
-                    x, y, plane, cx, cz, flag, blocked, walk_mask, blocked_mask, walk_data
+                    x, y, plane,   flag, blocked, walk_mask, blocked_mask, walk_data
                 ])?;
             }
             drop(tiles_stmt);
@@ -133,8 +133,6 @@ type TileRow = (
     i64,         // x
     i64,         // y
     i64,         // plane
-    Option<i64>, // chunk_x
-    Option<i64>, // chunk_z
     Option<i64>, // flag
     i64,         // blocked
     Option<i64>, // walk_mask
@@ -143,10 +141,6 @@ type TileRow = (
 );
 
 struct FileBatch {
-    chunk_x: Option<i64>,
-    chunk_z: Option<i64>,
-    chunk_size: Option<i64>,
-    tile_count: Option<i64>,
     tile_rows: Vec<TileRow>,
 }
 
@@ -169,10 +163,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
 
     // Send chunk meta first so writer can insert chunk row
     sender.send(FileBatch {
-        chunk_x,
-        chunk_z,
-        chunk_size,
-        tile_count: Some(data.tiles.len() as i64),
         tile_rows: Vec::new(),
     }).map_err(|e| anyhow::anyhow!(e))?;
 
@@ -183,13 +173,13 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
         let walk_json = t.walk.unwrap_or(JsonValue::Null);
         let walk_data = serde_json::to_string(&walk_json)?;
         let blocked_int = if t.blocked.unwrap_or(false) { 1i64 } else { 0i64 };
-
+        if t.blocked == Some(true) {
+            continue;
+        }
         rows.push((
             t.x,
             t.y,
             t.plane,
-            chunk_x,
-            chunk_z,
             t.flag,
             blocked_int,
             t.walk_mask,
@@ -198,10 +188,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
         ));
         if rows.len() >= SUB_BATCH {
             sender.send(FileBatch {
-                chunk_x,
-                chunk_z,
-                chunk_size,
-                tile_count: None,
                 tile_rows: std::mem::take(&mut rows),
             }).map_err(|e| anyhow::anyhow!(e))?;
         }
@@ -209,10 +195,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
 
     if !rows.is_empty() {
         sender.send(FileBatch {
-            chunk_x,
-            chunk_z,
-            chunk_size,
-            tile_count: None,
             tile_rows: rows,
         }).map_err(|e| anyhow::anyhow!(e))?;
     }

@@ -11,8 +11,8 @@ CREATE TABLE abstract_teleport_edges (
     cost INTEGER NOT NULL,
     requirement_id INTEGER,
     src_entrance INTEGER,
-    dst_entrance INTEGER.
-    CONSTRAINT chk_ate_cost_nonneg CHECK (cost >= 0);
+    dst_entrance INTEGER,
+    CONSTRAINT chk_ate_cost_nonneg CHECK (cost >= 0)
 );
 
 CREATE TABLE clusters (

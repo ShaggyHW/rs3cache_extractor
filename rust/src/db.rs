@@ -12,19 +12,28 @@ pub fn create_tables(conn: &mut Connection) -> Result<()> {
         r#"
 -- ========== TABLES ==========
 
-CREATE TABLE abstract_teleport_edges (
-    edge_id INTEGER PRIMARY KEY,
-    src_x INTEGER,
-    src_y INTEGER,
-    src_plane INTEGER,
-    dst_x INTEGER NOT NULL,
-    dst_y INTEGER NOT NULL,
-    dst_plane INTEGER NOT NULL,
-    cost INTEGER NOT NULL,
-    requirement_id INTEGER,
-    src_entrance INTEGER,
-    dst_entrance INTEGER,
-    CONSTRAINT chk_ate_cost_nonneg CHECK (cost >= 0)
+CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
+  edge_id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL
+       CHECK (kind IN ('door','lodestone','npc','object','item','ifslot')),
+  node_id INTEGER NOT NULL,
+
+  -- abstract graph geometry
+  src_x INTEGER,
+  src_y INTEGER,
+  src_plane INTEGER,
+  dst_x INTEGER NOT NULL,
+  dst_y INTEGER NOT NULL,
+  dst_plane INTEGER NOT NULL,
+
+  -- planning metadata
+  cost INTEGER NOT NULL CHECK (cost >= 0),
+  requirement_id INTEGER,
+  src_entrance INTEGER,
+  dst_entrance INTEGER,
+
+  -- ensure one concrete node maps to at most one abstract edge
+  UNIQUE(kind, node_id)
 );
 
 CREATE TABLE clusters (
@@ -244,11 +253,11 @@ CREATE TABLE tiles (
 
 -- ========== INDEXES ==========
 
-CREATE INDEX idx_abstract_teleport_dst
-    ON abstract_teleport_edges(dst_plane, dst_x, dst_y);
+CREATE INDEX IF NOT EXISTS idx_abstract_teleport_dst
+  ON abstract_teleport_edges(dst_plane, dst_x, dst_y);
 
-CREATE INDEX idx_abstract_teleport_src
-    ON abstract_teleport_edges(src_plane, src_x, src_y);
+CREATE INDEX IF NOT EXISTS idx_abstract_teleport_src
+  ON abstract_teleport_edges(src_plane, src_x, src_y);
 
 CREATE INDEX idx_cluster_entrances_plane_xy
     ON cluster_entrances(plane, x, y);
@@ -274,7 +283,8 @@ CREATE INDEX IF NOT EXISTS idx_cluster_tiles_xyplane
 CREATE INDEX IF NOT EXISTS idx_cluster_entrances_cluster_dir
   ON cluster_entrances(cluster_id, neighbor_dir);
 
-
+CREATE INDEX IF NOT EXISTS idx_ate_kind_node
+  ON abstract_teleport_edges(kind, node_id);
 CREATE INDEX IF NOT EXISTS idx_teleport_req_all
   ON teleports_requirements(id); -- lookup by id
 CREATE INDEX IF NOT EXISTS idx_ate_requirement
