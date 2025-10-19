@@ -49,7 +49,7 @@ CREATE TABLE cluster_entrances (
     x INTEGER NOT NULL,
     y INTEGER NOT NULL,
     plane INTEGER NOT NULL,
-    neighbor_dir TEXT NOT NULL CHECK (neighbor_dir IN ('N','S','E','W')),
+    neighbor_dir TEXT NOT NULL CHECK (neighbor_dir IN ('N','S','E','W','TP')),
     teleport_edge_id INTEGER REFERENCES abstract_teleport_edges(edge_id),
     UNIQUE (cluster_id, x, y, plane, neighbor_dir)
 );

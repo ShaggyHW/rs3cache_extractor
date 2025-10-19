@@ -9,8 +9,14 @@ node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/Ru
 cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db tiles.db
 cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo' --db tiles.db
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
-cargo run --manifest-path rust/Cargo.toml -- cluster build-clusters --threads 8  exec --force
+cargo run --manifest-path rust/Cargo.toml -- cluster build-clusters 
+cargo run --manifest-path rust/Cargo.toml -- cluster entrance-discovery 
 
+
+
+
+
+cargo run --manifest-path rust/Cargo.toml -- cluster --threads 8  exec --force
 
 ```
 

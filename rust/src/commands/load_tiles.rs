@@ -171,6 +171,14 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
         if t.blocked == Some(true) {
             continue;
         }
+        println!("Pushing: {}, {}, {}, {:?}, {}, {:?}, {:?}, {}",  t.x,
+            t.y,
+            t.plane,
+            t.flag,
+            blocked_int,
+            t.walk_mask,
+            t.blocked_mask,
+            walk_data,);
         rows.push((
             t.x,
             t.y,

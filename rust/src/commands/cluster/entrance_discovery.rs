@@ -1,10 +1,10 @@
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use rusqlite::{params, Connection};
+use std::collections::{BTreeSet, HashMap};
 
 use super::config::Config;
-use super::db::{ensure_schema, with_tx};
-use super::neighbor_policy::{MovementPolicy, Offset};
+use super::db::with_tx;
+use super::neighbor_policy::Offset;
 
 #[derive(Clone, Debug, Default)]
 pub struct EntrancesStats {
@@ -12,222 +12,165 @@ pub struct EntrancesStats {
     pub entrances_created: usize,
 }
 
-pub fn discover_entrances(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<EntrancesStats> {
-    ensure_schema(out_db)?;
+pub fn discover_entrances(_tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<EntrancesStats> {
+    // ensure_schema(out_db)?;
+    // Determine planes from cluster_tiles or use cfg.planes
+    let planes: Vec<i32> = if let Some(p) = &cfg.planes {
+        p.clone()
+    } else {
+        let mut st = out_db.prepare("SELECT DISTINCT plane FROM cluster_tiles")?;
+        let rows = st.query_map([], |r| r.get::<_, i32>(0))?;
+        let mut v: Vec<i32> = Vec::new();
+        for r in rows { v.push(r?); }
+        v.sort_unstable();
+        v
+    };
 
-    // Cache per-plane chunk label maps: (plane) -> ( (cx,cz) -> tile->cluster_id )
-    let mut cache: BTreeMap<i32, HashMap<(i32,i32), HashMap<(i32,i32), i64>>> = BTreeMap::new();
-
-    // List candidate chunk+plane scopes from tiles
-    let mut stmt = tiles_db.prepare("SELECT DISTINCT chunk_x, chunk_z, plane FROM tiles WHERE blocked = 0")?;
-    let rows = stmt.query_map([], |row| {
-        let cx: i32 = row.get(0)?;
-        let cz: i32 = row.get(1)?;
-        let plane: i32 = row.get(2)?;
-        Ok((cx, cz, plane))
-    })?;
-
-    let mut scopes: Vec<(i32,i32,i32)> = Vec::new();
-    for r in rows { let (cx,cz,pl) = r?; scopes.push((cx,cz,pl)); }
-
-    // Apply filters
-    scopes.retain(|(cx, cz, plane)| {
-        if let Some(planes) = &cfg.planes { if !planes.contains(&plane) { return false; } }
-        if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range { if *cx < xmin || *cx > xmax || *cz < zmin || *cz > zmax { return false; } }
-        true
-    });
-    scopes.sort_unstable();
-
-    let policy = MovementPolicy::default();
     let card: [Offset; 4] = [Offset(1,0), Offset(-1,0), Offset(0,1), Offset(0,-1)];
 
     let mut stats = EntrancesStats::default();
-
-    // Collect entrances for entire run; also track which cluster_ids are affected for idempotent delete
-    let mut entrances: BTreeSet<(i64,i32,i32,i32,char)> = BTreeSet::new();
+    // (cluster_id, x, y, plane, neighbor_dir)
+    let mut entrances: BTreeSet<(i64,i32,i32,i32,String)> = BTreeSet::new();
     let mut affected_clusters: BTreeSet<i64> = BTreeSet::new();
+    // Teleport endpoints to process after boundary entrances
+    // (cluster_id, x, y, plane, edge_id, is_src)
+    let mut tele_eps: Vec<(i64,i32,i32,i32,i64,bool)> = Vec::new();
 
-    for (cx, cz, plane) in scopes.into_iter() {
-        let map = compute_chunk_labels(tiles_db, &mut cache, plane, cx, cz, &policy)?;
+    for plane in planes.into_iter() {
+        // Build tile->cluster map for this plane from cluster_tiles
+        let mut stmt = out_db.prepare(
+            "SELECT x, y, cluster_id FROM cluster_tiles WHERE plane=?1",
+        )?;
+        let rows = stmt.query_map(params![plane], |row| {
+            let x: i32 = row.get(0)?;
+            let y: i32 = row.get(1)?;
+            let cid: i64 = row.get(2)?;
+            Ok((x,y,cid))
+        })?;
+        let mut map: HashMap<(i32,i32), i64> = HashMap::new();
+        for r in rows { let (x,y,cid) = r?; map.insert((x,y), cid); }
         if map.is_empty() { continue; }
 
-        // For each walkable tile in this chunk, check 4-neighbors
         for (&(x,y), &cid) in map.iter() {
             for &Offset(dx,dy) in &card {
                 let nx = x + dx;
                 let ny = y + dy;
-                let n_chunk_x = nx >> 6; // 64-based chunks
-                let n_chunk_z = ny >> 6;
-                let neighbor_map = if n_chunk_x == cx && n_chunk_z == cz {
-                    Some(&map)
-                } else {
-                    // Pull or compute neighbor chunk map lazily
-                    ensure_chunk_labels(tiles_db, &mut cache, plane, n_chunk_x, n_chunk_z, &policy)?
-                };
-                if let Some(nmap) = neighbor_map {
-                    if let Some(&ncid) = nmap.get(&(nx,ny)) {
-                        if ncid != cid {
-                            let dir = dir_from(dx,dy);
-                            let opp = opp_dir(dir);
-                            entrances.insert((cid, x, y, plane, dir));
-                            entrances.insert((ncid, nx, ny, plane, opp));
-                            affected_clusters.insert(cid);
-                            affected_clusters.insert(ncid);
-                        }
+                if let Some(&ncid) = map.get(&(nx,ny)) {
+                    if ncid != cid {
+                        let dir = dir_from(dx,dy).to_string();
+                        let opp = opp_dir(&dir).to_string();
+                        entrances.insert((cid, x, y, plane, dir));
+                        entrances.insert((ncid, nx, ny, plane, opp));
+                        affected_clusters.insert(cid);
+                        affected_clusters.insert(ncid);
                     }
                 }
             }
         }
 
-        stats.chunks_processed += 1;
+        // Add teleport endpoints as entrances (neighbor_dir = 'TP') on this plane
+        let mut estmt = out_db.prepare(
+            "SELECT edge_id, src_x, src_y, src_plane, dst_x, dst_y, dst_plane FROM abstract_teleport_edges \
+             WHERE (src_plane = ?1 OR dst_plane = ?1)"
+        )?;
+        let edge_rows = estmt.query_map(params![plane], |row| {
+            let edge_id: i64 = row.get(0)?;
+            let src_x: Option<i32> = row.get(1)?;
+            let src_y: Option<i32> = row.get(2)?;
+            let src_plane: Option<i32> = row.get(3)?;
+            let dst_x: i32 = row.get(4)?;
+            let dst_y: i32 = row.get(5)?;
+            let dst_plane: i32 = row.get(6)?;
+            Ok((edge_id, src_x, src_y, src_plane, dst_x, dst_y, dst_plane))
+        })?;
+        for er in edge_rows {
+            let (edge_id, src_x, src_y, src_plane, dst_x, dst_y, dst_plane) = er?;
+            if Some(plane) == src_plane {
+                if let (Some(sx), Some(sy)) = (src_x, src_y) {
+                    if let Some(&cid) = map.get(&(sx, sy)) {
+                        tele_eps.push((cid, sx, sy, plane, edge_id, true));
+                        affected_clusters.insert(cid);
+                    }
+                }
+            }
+            if plane == dst_plane {
+                if let Some(&cid) = map.get(&(dst_x, dst_y)) {
+                    tele_eps.push((cid, dst_x, dst_y, plane, edge_id, false));
+                    affected_clusters.insert(cid);
+                }
+            }
+        }
+
+        stats.chunks_processed += 1; // interpret as planes processed
     }
 
     if !cfg.dry_run {
         with_tx(out_db, |tx| {
-            // Clear existing entrances for affected clusters for idempotence
             if !affected_clusters.is_empty() {
-                // Build a temporary table of cluster_ids (or delete in batches)
                 let mut del = tx.prepare("DELETE FROM cluster_entrances WHERE cluster_id = ?1")?;
-                for cid in affected_clusters.iter() {
-                    del.execute(params![cid])?;
-                }
+                for cid in affected_clusters.iter() { del.execute(params![cid])?; }
             }
-            let mut exists = tx.prepare("SELECT 1 FROM chunk_clusters WHERE cluster_id=?1 LIMIT 1")?;
+            // Insert boundary and placeholder teleport entrances (dedup by UNIQUE)
             let mut ins = tx.prepare(
-                "INSERT INTO cluster_entrances (cluster_id, x, y, plane, neighbor_dir) VALUES (?1,?2,?3,?4,?5)"
+                "INSERT OR IGNORE INTO cluster_entrances (cluster_id, x, y, plane, neighbor_dir) VALUES (?1,?2,?3,?4,?5)"
             )?;
             for (cid, x, y, plane, dir) in entrances.iter() {
-                println!("Cluster Entrance");
+                ins.execute(params![cid, x, y, plane, dir])?;
+            }
 
-                println!("{} {} {} {} {}", cid, x, y, plane, dir);
-                let ok: Option<i64> = exists.query_row(params![cid], |r| r.get(0)).optional()?;
-                if ok.is_some() {
-                    ins.execute(params![cid, x, y, plane, &dir.to_string()])?;
+            // Insert teleports with edge_id, then fetch entrance_id and update edge linkage
+            let mut ins_tp = tx.prepare(
+                "INSERT OR IGNORE INTO cluster_entrances (cluster_id, x, y, plane, neighbor_dir, teleport_edge_id) \
+                 VALUES (?1,?2,?3,?4,'TP',?5)"
+            )?;
+            let mut sel_eid = tx.prepare(
+                "SELECT entrance_id FROM cluster_entrances WHERE cluster_id=?1 AND x=?2 AND y=?3 AND plane=?4 AND neighbor_dir='TP'"
+            )?;
+            let mut upd_src = tx.prepare("UPDATE abstract_teleport_edges SET src_entrance=?1 WHERE edge_id=?2")?;
+            let mut upd_dst = tx.prepare("UPDATE abstract_teleport_edges SET dst_entrance=?1 WHERE edge_id=?2")?;
+            for (cid, x, y, plane, edge_id, is_src) in tele_eps.iter() {
+                ins_tp.execute(params![cid, x, y, plane, edge_id])?;
+                let entrance_id: i64 = sel_eid.query_row(params![cid, x, y, plane], |r| r.get(0))?;
+                if *is_src {
+                    upd_src.execute(params![entrance_id, edge_id])?;
+                } else {
+                    upd_dst.execute(params![entrance_id, edge_id])?;
                 }
             }
             Ok(())
         })?;
     }
 
-    stats.entrances_created = entrances.len();
+    // Count unique teleport entrances (dedup by cluster+xy+plane)
+    let mut tp_unique: BTreeSet<(i64,i32,i32,i32)> = BTreeSet::new();
+    for (cid, x, y, plane, _edge_id, _is_src) in tele_eps.iter() {
+        tp_unique.insert((*cid, *x, *y, *plane));
+    }
+    stats.entrances_created = entrances.len() + tp_unique.len();
     Ok(stats)
 }
 
-fn ensure_chunk_labels<'a>(
-    tiles_db: &Connection,
-    cache: &'a mut BTreeMap<i32, HashMap<(i32,i32), HashMap<(i32,i32), i64>>>,
-    plane: i32,
-    cx: i32,
-    cz: i32,
-    policy: &MovementPolicy,
-) -> Result<Option<&'a HashMap<(i32,i32), i64>>> {
-    if cx < i32::MIN/2 || cz < i32::MIN/2 { return Ok(None); }
-    let v = cache.entry(plane).or_default();
-    if !v.contains_key(&(cx,cz)) {
-        let m = compute_labels_for_chunk(tiles_db, plane, cx, cz, policy)?;
-        v.insert((cx,cz), m);
-    }
-    Ok(v.get(&(cx,cz)))
-}
+// chunk-based helpers removed — entrances now derive from persisted cluster_tiles
 
-fn compute_chunk_labels(
-    tiles_db: &Connection,
-    cache: &mut BTreeMap<i32, HashMap<(i32,i32), HashMap<(i32,i32), i64>>>,
-    plane: i32,
-    cx: i32,
-    cz: i32,
-    policy: &MovementPolicy,
-) -> Result<HashMap<(i32,i32), i64>> {
-    // compute and store for this chunk
-    let m = compute_labels_for_chunk(tiles_db, plane, cx, cz, policy)?;
-    cache.entry(plane).or_default().insert((cx,cz), m.clone());
-    Ok(m)
-}
-
-fn compute_labels_for_chunk(
-    tiles_db: &Connection,
-    plane: i32,
-    cx: i32,
-    cz: i32,
-    policy: &MovementPolicy,
-) -> Result<HashMap<(i32,i32), i64>> {
-    // Load walkable tiles in chunk
-    let mut tiles_stmt = tiles_db.prepare(
-        "SELECT x, y FROM tiles WHERE blocked=0 AND plane=?1 AND chunk_x=?2 AND chunk_z=?3",
-    )?;
-    let rows = tiles_stmt.query_map(params![plane, cx, cz], |row| {
-        let x: i32 = row.get(0)?;
-        let y: i32 = row.get(1)?;
-        Ok((x,y))
-    })?;
-    let mut walkable: HashSet<(i32,i32)> = HashSet::new();
-    for r in rows { walkable.insert(r?); }
-
-    // BFS components
-    let mut comps: Vec<Vec<(i32,i32)>> = Vec::new();
-    let mut visited: HashSet<(i32,i32)> = HashSet::new();
-    let offsets = policy.neighbor_offsets();
-    for &start in walkable.iter() {
-        if visited.contains(&start) { continue; }
-        let mut comp: Vec<(i32,i32)> = Vec::new();
-        let mut q: VecDeque<(i32,i32)> = VecDeque::new();
-        visited.insert(start);
-        q.push_back(start);
-        while let Some((sx,sy)) = q.pop_front() {
-            comp.push((sx,sy));
-            for &Offset(dx,dy) in offsets.iter() {
-                let nx = sx + dx;
-                let ny = sy + dy;
-                let n = (nx,ny);
-                if !visited.contains(&n) && walkable.contains(&n) {
-                    visited.insert(n);
-                    q.push_back(n);
-                }
-            }
-        }
-        comp.sort_unstable();
-        comps.push(comp);
-    }
-    comps.sort_by(|a,b| a.first().cmp(&b.first()).then(a.len().cmp(&b.len())));
-
-    // Build tile->cluster_id map using deterministic id scheme
-    let mut map: HashMap<(i32,i32), i64> = HashMap::new();
-    for (idx, comp) in comps.iter().enumerate() {
-        let local_index = idx as i64;
-        let cid = deterministic_cluster_id(plane as i64, cx as i64, cz as i64, local_index);
-        for &(x,y) in comp.iter() {
-            map.insert((x,y), cid);
-        }
-    }
-    Ok(map)
-}
-
-fn dir_from(dx: i32, dy: i32) -> char {
+fn dir_from(dx: i32, dy: i32) -> &'static str {
     match (dx,dy) {
-        (1,0) => 'E',
-        (-1,0) => 'W',
-        (0,1) => 'N',
-        (0,-1) => 'S',
-        _ => '?',
+        (1,0) => "E",
+        (-1,0) => "W",
+        (0,1) => "N",
+        (0,-1) => "S",
+        _ => "?",
     }
 }
-fn opp_dir(d: char) -> char {
+fn opp_dir(d: &str) -> &'static str {
     match d {
-        'E' => 'W',
-        'W' => 'E',
-        'N' => 'S',
-        'S' => 'N',
-        _ => '?',
+        "E" => "W",
+        "W" => "E",
+        "N" => "S",
+        "S" => "N",
+        _ => "?",
     }
 }
-
-fn deterministic_cluster_id(plane: i64, chunk_x: i64, chunk_z: i64, local_index: i64) -> i64 {
-    let p  = (plane & 0xF) << 60;
-    let cx = (chunk_x & 0xFFFFFF) << 36;
-    let cz = (chunk_z & 0xFFFFFF) << 12;
-    let li = (local_index & 0xFFF);
-    p | cx | cz | li
-}
+// deterministic_cluster_id no longer needed here
 
 #[cfg(test)]
 mod tests {

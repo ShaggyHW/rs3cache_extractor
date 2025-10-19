@@ -42,7 +42,7 @@ Defines cluster entrances/exits, possibly linked to teleport edges.
 | entrance_id | INTEGER (PK) | Unique entrance identifier. |
 | cluster_id | INTEGER | References `clusters(cluster_id)`. |
 | x, y, plane | INTEGER | Entrance coordinates. |
-| neighbor_dir | TEXT | Direction (`N`, `S`, `E`, `W`). |
+| neighbor_dir | TEXT | Direction (`N`, `S`, `E`, `W`, `TP`). |
 | teleport_edge_id | INTEGER | References `abstract_teleport_edges(edge_id)`. |
 
 ---
