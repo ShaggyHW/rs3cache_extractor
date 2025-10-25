@@ -6,7 +6,7 @@ def convert_to_coordinates(input_file, output_file):
 
     coordinates = []
     for line in lines:
-        parts = [part.strip() for part in line.strip().split(',')]
+        parts = line.strip().split()
         if len(parts) == 3:
             x, y, z = parts
             coordinates.append(f"    new Coordinate({x}, {y}, {z})")

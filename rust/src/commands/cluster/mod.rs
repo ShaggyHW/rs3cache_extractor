@@ -14,6 +14,7 @@ pub mod logging;
 pub mod models;
 pub mod neighbor_policy;
 pub mod teleport_connector;
+pub mod intra_trimmer;
 
 #[derive(Args, Debug, Clone)]
 pub struct CommonOpts {
@@ -59,6 +60,9 @@ pub enum ClusterCommand {
     /// Build intra-cluster connections (optional path storage)
     #[command(name = "intra-connector")]
     IntraConnector,
+    /// Trim intra-cluster connections to top-5 per exit cluster
+    #[command(name = "intra-trimmer")]
+    IntraTrimmer,
     // /// Precompute JPS acceleration structures
     // #[command(name = "jps-accelerator")]
     // JpsAccelerator,
@@ -156,6 +160,11 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
             let mut out = db::open_rw(&out_path)?;
             let tiles = db::open_ro(&tiles_path)?;
             let _ = intra_connector::build_intra_edges(&tiles, &mut out, &cfg)?;
+            Ok(())
+        }
+        ClusterCommand::IntraTrimmer => {
+            let mut out = db::open_rw(&out_path)?;
+            let _ = intra_trimmer::trim_intra_edges(&mut out, &cfg)?;
             Ok(())
         }
         ClusterCommand::InterConnector => {

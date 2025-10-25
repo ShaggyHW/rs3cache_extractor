@@ -8,6 +8,7 @@ use super::intra_connector;
 use super::inter_connector;
 use super::jps_accelerator;
 use super::teleport_connector;
+use super::intra_trimmer;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Stage {
@@ -15,6 +16,7 @@ pub enum Stage {
     Entrances,
     TeleportEntrances,
     Intra,
+    IntraTrim,
     Inter,
     TeleportEdges,
     Jps,
@@ -27,12 +29,13 @@ impl Stage {
             Stage::Entrances => "cluster_stage_entrances",
             Stage::TeleportEntrances => "cluster_stage_teleport_entrances",
             Stage::Intra => "cluster_stage_intra",
+            Stage::IntraTrim => "cluster_stage_intra_trim",
             Stage::Inter => "cluster_stage_inter",
             Stage::TeleportEdges => "cluster_stage_teleport_edges",
             Stage::Jps => "cluster_stage_jps",
         }
     }
-    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Inter, Stage::Intra] }
+    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Intra, Stage::IntraTrim, Stage::Inter] }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -47,6 +50,7 @@ pub struct ExecStats {
     pub ran_entrances: bool,
     pub ran_teleport_entrances: bool,
     pub ran_intra: bool,
+    pub ran_intra_trim: bool,
     pub ran_inter: bool,
     pub ran_teleport_edges: bool,
     pub ran_jps: bool,
@@ -103,6 +107,12 @@ pub fn run_pipeline(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config
                 set_stage_done(out_db, Stage::Intra)?;
                 stats.ran_intra = true;
             }
+            Stage::IntraTrim => {
+                let _s = intra_trimmer::trim_intra_edges(out_db, cfg)?;
+                // No specific validation beyond window constraint below
+                set_stage_done(out_db, Stage::IntraTrim)?;
+                stats.ran_intra_trim = true;
+            }
             Stage::Inter => {
                 let _s = inter_connector::build_inter_edges(tiles_db, out_db, cfg)?;
                 validate_inter(out_db)?;
@@ -145,6 +155,34 @@ fn is_stage_done(db: &Connection, s: Stage) -> Result<bool> {
         Stage::Intra => {
             let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_intraconnections LIMIT 1", [], |r| r.get(0)).optional()?;
             Ok(v.is_some())
+        }
+        Stage::IntraTrim => {
+            // Done when no entrance_from/ext cluster group has more than 5 rows
+            let q = r#"
+            WITH to_exit AS (
+                SELECT
+                    ci.entrance_from,
+                    ci.entrance_to,
+                    ci.cost,
+                    (
+                        SELECT ct.cluster_id
+                        FROM cluster_entrances ce_to
+                        JOIN cluster_tiles ct ON ct.x = (ce_to.x + CASE ce_to.neighbor_dir WHEN 'N' THEN 0 WHEN 'S' THEN 0 WHEN 'E' THEN 1 WHEN 'W' THEN -1 ELSE 0 END)
+                                             AND ct.y = (ce_to.y + CASE ce_to.neighbor_dir WHEN 'N' THEN 1 WHEN 'S' THEN -1 WHEN 'E' THEN 0 WHEN 'W' THEN 0 ELSE 0 END)
+                                             AND ct.plane = ce_to.plane
+                        WHERE ce_to.entrance_id = ci.entrance_to
+                        LIMIT 1
+                    ) AS ext_cid
+                FROM cluster_intraconnections ci
+            ), ranked AS (
+                SELECT entrance_from, entrance_to, ext_cid,
+                       ROW_NUMBER() OVER (PARTITION BY entrance_from, ext_cid ORDER BY cost ASC, entrance_to ASC) AS rn
+                FROM to_exit
+            )
+            SELECT 1 FROM ranked WHERE ext_cid IS NOT NULL AND rn > 5 LIMIT 1;
+            "#;
+            let v: Option<i64> = db.query_row(q, [], |r| r.get(0)).optional()?;
+            Ok(v.is_none())
         }
         Stage::Inter => {
             let v: Option<i64> = db.query_row("SELECT 1 FROM cluster_interconnections LIMIT 1", [], |r| r.get(0)).optional()?;
