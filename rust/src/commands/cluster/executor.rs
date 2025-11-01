@@ -28,14 +28,14 @@ impl Stage {
             Stage::Build => "cluster_stage_build",
             Stage::Entrances => "cluster_stage_entrances",
             Stage::TeleportEntrances => "cluster_stage_teleport_entrances",
-            Stage::Intra => "cluster_stage_intra",
-            Stage::IntraTrim => "cluster_stage_intra_trim",
             Stage::Inter => "cluster_stage_inter",
+            Stage::Intra => "cluster_stage_intra",
+            Stage::IntraTrim => "cluster_stage_intra_trim",           
             Stage::TeleportEdges => "cluster_stage_teleport_edges",
             Stage::Jps => "cluster_stage_jps",
         }
     }
-    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Intra, Stage::IntraTrim, Stage::Inter] }
+    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Inter, Stage::Intra, Stage::IntraTrim, Stage::TeleportEdges] }
 }
 
 #[derive(Copy, Clone, Debug, Default)]

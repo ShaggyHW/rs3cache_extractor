@@ -43,7 +43,7 @@ pub fn trim_intra_edges(out_db: &mut Connection, cfg: &Config) -> Result<TrimSta
                ROW_NUMBER() OVER (PARTITION BY entrance_from, ext_cid ORDER BY cost ASC, entrance_to ASC) AS rn
         FROM to_exit
     )
-    SELECT COUNT(*) FROM ranked WHERE ext_cid IS NOT NULL AND rn > 5;
+    SELECT COUNT(*) FROM ranked WHERE ext_cid IS NOT NULL AND rn > 1;
     "#;
 
     let rows_to_delete: i64 = out_db.query_row(count_sql, [], |r| r.get(0))?;
@@ -91,7 +91,7 @@ pub fn trim_intra_edges(out_db: &mut Connection, cfg: &Config) -> Result<TrimSta
         )
         DELETE FROM cluster_intraconnections
         WHERE rowid IN (
-            SELECT ci_rowid FROM ranked WHERE ext_cid IS NOT NULL AND rn > 5
+            SELECT ci_rowid FROM ranked WHERE ext_cid IS NOT NULL AND rn > 1
         );
         "#;
         tx.execute_batch(del_sql)?;

@@ -332,14 +332,54 @@ fn shortest_path_in_set(
 }
 
 fn encode_path_blob(path: Vec<(i32,i32)>, plane: i32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(path.len() * 12);
+    let reduced = reduce_path_to_breakpoints(&path);
+    let mut out = Vec::with_capacity(reduced.len() * 12);
     let plane_bytes = plane.to_le_bytes();
-    for (x,y) in path {
+    for (x,y) in reduced {
         out.extend_from_slice(&x.to_le_bytes());
         out.extend_from_slice(&y.to_le_bytes());
         out.extend_from_slice(&plane_bytes);
     }
     out
+}
+
+fn reduce_path_to_breakpoints(path: &[(i32,i32)]) -> Vec<(i32,i32)> {
+    match path.len() {
+        0 => Vec::new(),
+        1 => path.to_vec(),
+        _ => {
+            let mut reduced: Vec<(i32,i32)> = Vec::with_capacity(path.len());
+            reduced.push(path[0]);
+            for window in path.windows(3) {
+                let prev = window[0];
+                let cur = window[1];
+                let next = window[2];
+                let dir_in = movement_dir(prev, cur);
+                let dir_out = movement_dir(cur, next);
+                if dir_in != dir_out {
+                    if reduced.last().copied() != Some(cur) {
+                        reduced.push(cur);
+                    }
+                }
+            }
+            if let Some(&last) = path.last() {
+                if reduced.last().copied() != Some(last) {
+                    reduced.push(last);
+                }
+            }
+            reduced
+        }
+    }
+}
+
+fn movement_dir(from: (i32,i32), to: (i32,i32)) -> Option<(i32,i32)> {
+    let dx = to.0 - from.0;
+    let dy = to.1 - from.1;
+    if dx == 0 && dy == 0 {
+        None
+    } else {
+        Some((dx.signum(), dy.signum()))
+    }
 }
 
 // deterministic_cluster_id no longer needed with explicit cluster IDs in DB
@@ -398,5 +438,45 @@ mod tests {
         let n_blobs: i64 = out.query_row("SELECT COUNT(*) FROM cluster_intraconnections WHERE path_blob IS NOT NULL", [], |r| r.get(0))?;
         assert_eq!(n_blobs, 2);
         Ok(())
+    }
+
+    #[test]
+    fn encode_path_blob_reduces_straight_segments() {
+        let path = vec![(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)];
+        let blob = encode_path_blob(path.clone(), 0);
+        assert_eq!(blob.len(), 3 * 12);
+
+        let decoded: Vec<(i32, i32)> = blob
+            .chunks_exact(12)
+            .map(|chunk| {
+                let (xb, yb) = chunk.split_at(4);
+                let (yb, _) = yb.split_at(4);
+                (
+                    i32::from_le_bytes(xb.try_into().unwrap()),
+                    i32::from_le_bytes(yb.try_into().unwrap()),
+                )
+            })
+            .collect();
+        assert_eq!(decoded, vec![(0, 0), (0, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn encode_path_blob_preserves_diagonal_runs() {
+        let path = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
+        let blob = encode_path_blob(path.clone(), 0);
+        assert_eq!(blob.len(), 2 * 12);
+
+        let decoded: Vec<(i32, i32)> = blob
+            .chunks_exact(12)
+            .map(|chunk| {
+                let (xb, yb) = chunk.split_at(4);
+                let (yb, _) = yb.split_at(4);
+                (
+                    i32::from_le_bytes(xb.try_into().unwrap()),
+                    i32::from_le_bytes(yb.try_into().unwrap()),
+                )
+            })
+            .collect();
+        assert_eq!(decoded, vec![(0, 0), (3, 3)]);
     }
 }
