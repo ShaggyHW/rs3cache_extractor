@@ -4,3 +4,9 @@ worldReachableTiles.db-wal
 worldReachableTiles.db-shm
 worldReachableTiles.db
 /rust/target
+/target
+/target
+target/rust-analyzer/flycheck0/stderr
+target/rust-analyzer/flycheck0/stdout
+worldReachableTiles_Backup.db
+tiles.db
