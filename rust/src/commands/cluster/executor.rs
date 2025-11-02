@@ -35,7 +35,7 @@ impl Stage {
             Stage::Jps => "cluster_stage_jps",
         }
     }
-    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Inter, Stage::Intra, Stage::IntraTrim, Stage::TeleportEdges] }
+    pub fn all() -> &'static [Stage] { &[Stage::Build, Stage::Entrances, Stage::Inter, Stage::Intra, Stage::IntraTrim] }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
