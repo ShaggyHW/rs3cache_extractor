@@ -101,7 +101,7 @@ pub fn build_clusters(
                     let new_max_y = max_y.max(ny);
                     let width = (new_max_x - new_min_x + 1).abs() as i32;
                     let height = (new_max_y - new_min_y + 1).abs() as i32;
-                    if width > 128 || height > 128 { continue; }
+                    if width > 32 || height > 32 { continue; }
 
                     // Accept
                     min_x = new_min_x; max_x = new_max_x;

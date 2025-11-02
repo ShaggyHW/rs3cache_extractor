@@ -3,3 +3,4 @@
 worldReachableTiles.db-wal
 worldReachableTiles.db-shm
 worldReachableTiles.db
+/rust/target

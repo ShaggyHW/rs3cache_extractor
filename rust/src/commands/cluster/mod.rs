@@ -126,9 +126,11 @@ pub fn cmd_cluster(common: CommonOpts, sub: ClusterCommand) -> Result<()> {
     // Init logging and thread pool
     logging::init(cfg.log_level.as_deref());
     if let Some(n) = cfg.threads {
-        let _ = rayon::ThreadPoolBuilder::new()
+        if let Err(e) = rayon::ThreadPoolBuilder::new()
             .num_threads(n)
-            .build_global();
+            .build_global() {
+            log::warn!("Failed to configure rayon thread pool: {}", e);
+        }
     }
 
     // Resolve DB paths

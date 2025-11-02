@@ -1,10 +1,11 @@
 use anyhow::Result;
+use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::config::Config;
-use super::db::{with_tx};
+use super::db::with_tx;
 use super::neighbor_policy::{MovementPolicy, Offset};
 
 #[derive(Clone, Debug, Default)]
@@ -13,7 +14,7 @@ pub struct IntraStats {
     pub edges_created: usize,
 }
 
-pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<IntraStats> {
+pub fn build_intra_edges(_tiles_db: &Connection, out_db: &mut Connection, cfg: &Config) -> Result<IntraStats> {
     // ensure_schema(out_db)?;
 
     let mut stats = IntraStats::default();
@@ -61,17 +62,17 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
 
     if cfg.dry_run {
         println!("intra: dry_run enabled - skipping database writes");
-    } else {
-        println!("intra: intra edge generation will commit after each cluster");
+        return Ok(stats);
     }
 
+    println!("intra: intra edge generation will commit after each cluster");
+
+    // For each cluster, gather data and compute edges in parallel-friendly way
     for (cluster_id, plane) in clusters.iter().copied() {
         println!("intra: processing cluster {} on plane {}", cluster_id, plane);
-        if cfg.dry_run {
-            continue;
-        }
 
-        let processed_edges = with_tx(out_db, |tx| {
+        // Phase 1: Load cluster data sequentially from DB
+        let cluster_data = with_tx(out_db, |tx| -> Result<Option<(Vec<(i64, i32, i32, char)>, HashSet<(i32, i32)>, Vec<Option<i64>>)>> {
             if !cleared_clusters.contains(&cluster_id) {
                 println!("intra: clearing existing intraconnections for cluster {}", cluster_id);
                 tx.execute(
@@ -82,34 +83,40 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
                 cleared_clusters.insert(cluster_id);
             }
 
-            // Get entrances for this cluster (filter by chunk range if provided)
-            let mut es = tx.prepare(
-                "SELECT entrance_id, x, y, neighbor_dir FROM cluster_entrances WHERE cluster_id=?1 ORDER BY entrance_id"
-            )?;
-            let erows = es.query_map(params![cluster_id], |row| {
-                let eid: i64 = row.get(0)?;
-                let x: i32 = row.get(1)?;
-                let y: i32 = row.get(2)?;
-                let d: String = row.get(3)?;
-                Ok((eid, x, y, d.chars().next().unwrap_or('?')))
-            })?;
-            let mut entrances: Vec<(i64,i32,i32,char)> = Vec::new();
-            for r in erows { entrances.push(r?); }
+            let entrances = {
+                let mut es = tx.prepare(
+                    "SELECT entrance_id, x, y, neighbor_dir FROM cluster_entrances WHERE cluster_id=?1 ORDER BY entrance_id"
+                )?;
+                let erows = es.query_map(params![cluster_id], |row| {
+                    let eid: i64 = row.get(0)?;
+                    let x: i32 = row.get(1)?;
+                    let y: i32 = row.get(2)?;
+                    let d: String = row.get(3)?;
+                    Ok((eid, x, y, d.chars().next().unwrap_or('?')))
+                })?;
+                let mut entrances: Vec<(i64,i32,i32,char)> = Vec::new();
+                for r in erows { entrances.push(r?); }
+                entrances
+            };
+
             println!(
                 "intra: cluster {} has {} entrances",
                 cluster_id,
                 entrances.len()
             );
+
             if entrances.len() < 2 {
                 println!("intra: skipping cluster {} (needs >=2 entrances)", cluster_id);
                 return Ok(None);
             }
 
-            // Optional chunk-range filter: keep cluster only if at least one entrance lies within range
             if let Some((xmin,xmax,zmin,zmax)) = cfg.chunk_range {
-                if !entrances.iter().any(|&(_eid, x, y, _)| {
-                    let cx = x >> 6; let cz = y >> 6; cx >= xmin && cx <= xmax && cz >= zmin && cz <= zmax
-                }) {
+                let within_range = entrances.iter().any(|&(_eid, x, y, _)| {
+                    let cx = x >> 6;
+                    let cz = y >> 6;
+                    cx >= xmin && cx <= xmax && cz >= zmin && cz <= zmax
+                });
+                if !within_range {
                     println!(
                         "intra: skipping cluster {} (no entrances within configured chunk range)",
                         cluster_id
@@ -118,21 +125,84 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
                 }
             }
 
-            // Load cluster tile set
-            let tile_set = load_cluster_tiles(&tx, cluster_id, plane)?;
+            let tile_set = load_cluster_tiles(tx, cluster_id, plane)?;
             println!(
                 "intra: cluster {} tile set size = {}",
                 cluster_id,
                 tile_set.len()
             );
 
-            // Quick membership check for entrances
             if !entrances.iter().all(|&(_eid, x, y, _)| tile_set.contains(&(x,y))) {
                 println!("intra: skipping cluster {} (entrance outside cluster tiles)", cluster_id);
                 return Ok(None);
             }
 
-            // Pre-prepare insert statement
+            let exit_clusters = {
+                let mut q_exit = tx.prepare(
+                    "SELECT cluster_id FROM cluster_tiles WHERE x=?1 AND y=?2 AND plane=?3 LIMIT 1"
+                )?;
+                let mut exit_clusters: Vec<Option<i64>> = Vec::with_capacity(entrances.len());
+                for &(_eid, x, y, d) in entrances.iter() {
+                    let (dx, dy) = match d {
+                        'N' => (0, 1),
+                        'S' => (0, -1),
+                        'E' => (1, 0),
+                        'W' => (-1, 0),
+                        _ => (0, 0),
+                    };
+                    if dx == 0 && dy == 0 {
+                        exit_clusters.push(None);
+                        continue;
+                    }
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    let cid_opt: Option<i64> = q_exit
+                        .query_row(params![nx, ny, plane], |r| r.get(0))
+                        .optional()?;
+                    let cid_opt = cid_opt.filter(|&cid| cid != cluster_id);
+                    exit_clusters.push(cid_opt);
+                }
+                exit_clusters
+            };
+
+            Ok(Some((entrances, tile_set, exit_clusters)))
+        })?;
+
+        let Some((entrances, tile_set, exit_clusters)) = cluster_data else {
+            continue;
+        };
+
+        // Phase 2: Compute paths in parallel
+        // Build list of (i, j) pairs to compute in parallel
+        let mut pairs_to_compute: Vec<(usize, usize)> = Vec::new();
+        for i in 0..entrances.len() {
+            for j in 0..entrances.len() {
+                if i == j { continue; }
+                // Skip redundant pairs where both entrances exit to the same external cluster.
+                if let (Some(ci), Some(cj)) = (exit_clusters[i], exit_clusters[j]) {
+                    if ci == cj {
+                        continue;
+                    }
+                }
+                pairs_to_compute.push((i, j));
+            }
+        }
+
+        // Compute all shortest paths in parallel
+        let compute_results: Vec<_> = pairs_to_compute
+            .par_iter()
+            .map(|&(i, j)| {
+                let (eid_a, ax, ay, _da) = entrances[i];
+                let (eid_b, bx, by, _db) = entrances[j];
+                let (cost, path_opt) = shortest_path_in_set((ax,ay), (bx,by), &tile_set, offsets, cost_card, cost_diag);
+                (eid_a, eid_b, cost, path_opt)
+            })
+            .collect();
+
+        // Phase 3: Write results sequentially
+        let tx = out_db.transaction()?;
+        let mut cluster_edge_count = 0usize;
+        {
             let mut ins = tx.prepare(
                 "INSERT INTO cluster_intraconnections (entrance_from, entrance_to, cost, path_blob)
                  VALUES (?1,?2,?3,?4)
@@ -141,93 +211,30 @@ pub fn build_intra_edges(tiles_db: &Connection, out_db: &mut Connection, cfg: &C
                                path_blob = COALESCE(cluster_intraconnections.path_blob, excluded.path_blob)"
             )?;
 
-            // Precompute external exit cluster per entrance to allow skipping redundant pairs.
-            // External means the neighbor tile belongs to a different cluster than current.
-            let mut q_exit = tx.prepare(
-                "SELECT cluster_id FROM cluster_tiles WHERE x=?1 AND y=?2 AND plane=?3 LIMIT 1"
-            )?;
-            let mut exit_clusters: Vec<Option<i64>> = Vec::with_capacity(entrances.len());
-            for &(_eid, x, y, d) in entrances.iter() {
-                let (dx, dy) = match d {
-                    'N' => (0, 1),
-                    'S' => (0, -1),
-                    'E' => (1, 0),
-                    'W' => (-1, 0),
-                    _ => (0, 0),
-                };
-                if dx == 0 && dy == 0 {
-                    exit_clusters.push(None);
-                    continue;
-                }
-                let nx = x + dx; let ny = y + dy;
-                let cid_opt: Option<i64> = q_exit
-                    .query_row(params![nx, ny, plane], |r| r.get(0))
-                    .optional()?;
-                let cid_opt = cid_opt.filter(|&cid| cid != cluster_id);
-                exit_clusters.push(cid_opt);
-            }
-
-            // Compute all-pairs shortest paths between entrances deterministically
-            let mut cluster_edge_count = 0usize;
-            for i in 0..entrances.len() {
-                for j in 0..entrances.len() {
-                    if i == j { continue; }
-                    // Skip redundant pairs where both entrances exit to the same external cluster.
-                    if let (Some(ci), Some(cj)) = (exit_clusters[i], exit_clusters[j]) {
-                        if ci == cj {
-                            let (eid_a, _, _, _ ) = entrances[i];
-                            let (eid_b, _, _, _ ) = entrances[j];
-                            println!(
-                                "intra: skipping pair within cluster {} because entrances {} and {} both exit to cluster {}",
-                                cluster_id, eid_a, eid_b, ci
-                            );
-                            continue;
-                        }
-                    }
-                    let (eid_a, ax, ay, _da) = entrances[i];
-                    let (eid_b, bx, by, _db) = entrances[j];
-                    // Deterministic ordering via indices already
-                    println!(
-                        "intra: computing path cluster {} entrance {} -> {}",
-                        cluster_id,
+            for (eid_a, eid_b, cost, path_opt) in compute_results {
+                if let Some(total) = cost {
+                    let blob = if cfg.store_paths { path_opt.map(|p| encode_path_blob(p, plane)) } else { None };
+                    ins.execute(params![eid_a, eid_b, total as i64, blob])?;
+                    log::trace!(
+                        "intra: stored intra edge {} -> {} cost={} (blob={})",
                         eid_a,
-                        eid_b
+                        eid_b,
+                        total,
+                        blob.as_ref().map(|b| b.len()).unwrap_or(0)
                     );
-                    let (cost, path_opt) = shortest_path_in_set((ax,ay), (bx,by), &tile_set, offsets, cost_card, cost_diag);
-                    if let Some(total) = cost {
-                        let blob = if cfg.store_paths { path_opt.map(|p| encode_path_blob(p, plane)) } else { None };
-                        ins.execute(params![eid_a, eid_b, total as i64, blob])?;
-                        println!(
-                            "intra: stored intra edge {} -> {} cost={} (blob={})",
-                            eid_a,
-                            eid_b,
-                            total,
-                            blob.as_ref().map(|b| b.len()).unwrap_or(0)
-                        );
-                        cluster_edge_count += 1;
-                    } else {
-                        println!(
-                            "intra: no path found within cluster {} from entrance {} to {}",
-                            cluster_id,
-                            eid_a,
-                            eid_b
-                        );
-                    }
+                    cluster_edge_count += 1;
                 }
             }
-
-            println!(
-                "intra: completed cluster {} -> {} intra edges inserted",
-                cluster_id,
-                cluster_edge_count
-            );
-            Ok(Some(cluster_edge_count))
-        })?;
-
-        if let Some(edge_count) = processed_edges {
-            stats.clusters_processed += 1;
-            stats.edges_created += edge_count;
         }
+        tx.commit()?;        
+
+        println!(
+            "intra: completed cluster {} -> {} intra edges inserted",
+            cluster_id,
+            cluster_edge_count
+        );
+        stats.clusters_processed += 1;
+        stats.edges_created += cluster_edge_count;
     }
 
     println!(
