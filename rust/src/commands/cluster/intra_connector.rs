@@ -269,7 +269,7 @@ fn load_movement_costs(db: &Connection) -> Result<(i64,i64)> {
         .query_row("SELECT value FROM meta WHERE key='movement_cost_diagonal'", [], |r| r.get(0))
         .optional()?;
     let sc = straight.and_then(|s| s.parse::<i64>().ok()).unwrap_or(600);
-    let dc = diagonal.and_then(|s| s.parse::<i64>().ok()).unwrap_or(1000);
+    let dc = diagonal.and_then(|s| s.parse::<i64>().ok()).unwrap_or(600);
     Ok((sc, dc))
 }
 
@@ -339,7 +339,8 @@ fn shortest_path_in_set(
 }
 
 fn encode_path_blob(path: Vec<(i32,i32)>, plane: i32) -> Vec<u8> {
-    let reduced = reduce_path_to_breakpoints(&path);
+    //let reduced = reduce_path_to_breakpoints(&path);
+    let reduced = path;
     let mut out = Vec::with_capacity(reduced.len() * 12);
     let plane_bytes = plane.to_le_bytes();
     for (x,y) in reduced {
