@@ -175,31 +175,31 @@ pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String]
     }
 
     // If any teleport-related tables were touched (truncated or inserted), rebuild abstract_teleport_edges
-    if teleports_touched {
-        if dry_run {
-            println!(
-                "Dry-run: would rebuild abstract_teleport_edges from teleports_all (DELETE + INSERT)."
-            );
-        } else {
-            println!("Rebuilding abstract_teleport_edges from teleports_all ...");
-            tx.execute_batch(
-                r#"
-                DELETE FROM abstract_teleport_edges;
-                INSERT INTO abstract_teleport_edges (
-                  kind, node_id,
-                  src_x, src_y, src_plane,
-                  dst_x, dst_y, dst_plane,
-                  cost, requirement_id
-                )
-                SELECT kind, id,
-                       src_x, src_y, src_plane,
-                       dst_x, dst_y, dst_plane,
-                       cost, requirement_id
-                FROM teleports_all;
-                "#,
-            )?;
-        }
-    }
+    // if teleports_touched {
+    //     if dry_run {
+    //         println!(
+    //             "Dry-run: would rebuild abstract_teleport_edges from teleports_all (DELETE + INSERT)."
+    //         );
+    //     } else {
+    //         println!("Rebuilding abstract_teleport_edges from teleports_all ...");
+    //         tx.execute_batch(
+    //             r#"
+    //             DELETE FROM abstract_teleport_edges;
+    //             INSERT INTO abstract_teleport_edges (
+    //               kind, node_id,
+    //               src_x, src_y, src_plane,
+    //               dst_x, dst_y, dst_plane,
+    //               cost, requirement_id
+    //             )
+    //             SELECT kind, id,
+    //                    src_x, src_y, src_plane,
+    //                    dst_x, dst_y, dst_plane,
+    //                    cost, requirement_id
+    //             FROM teleports_all;
+    //             "#,
+    //         )?;
+    //     }
+    // }
 
     if dry_run {
         println!("Dry-run complete. Rows that would be inserted: {}", total_inserted);

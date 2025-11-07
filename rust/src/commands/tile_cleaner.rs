@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, Row};
-use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -50,38 +49,58 @@ struct WalkCache {
 impl WalkCache {
     fn new() -> Self { Self { raw: HashMap::new(), reconciled: HashMap::new() } }
 
-    fn parse_json_map(s: &str) -> HashMap<String, bool> {
+    // Mapping order for walk_mask bits: 0..7
+    // [left, bottom, right, top, topleft, bottomleft, bottomright, topright]
+    fn mask_dirs() -> [&'static str; 8] {
+        [
+            "left",
+            "bottom",
+            "right",
+            "top",
+            "topleft",
+            "bottomleft",
+            "bottomright",
+            "topright",
+        ]
+    }
+
+    fn decode_mask(mask: i64) -> HashMap<String, bool> {
         let mut out = HashMap::new();
-        if let Ok(v) = serde_json::from_str::<JsonValue>(s) {
-            if let Some(obj) = v.as_object() {
-                for (k, vv) in obj.iter() {
-                    let b = match vv {
-                        JsonValue::Bool(b) => *b,
-                        JsonValue::Number(n) => n.as_i64().unwrap_or(0) != 0,
-                        JsonValue::String(t) => {
-                            let t = t.trim().to_ascii_lowercase();
-                            matches!(t.as_str(), "true" | "yes" | "y" | "on" | "1")
-                        }
-                        _ => false,
-                    };
-                    out.insert(k.to_ascii_lowercase(), b);
-                }
+        let dirs = Self::mask_dirs();
+        for i in 0..8 {
+            if (mask & (1 << i)) != 0 {
+                out.insert(dirs[i].to_string(), true);
             }
         }
         out
     }
 
+    fn encode_mask(map: &HashMap<String, bool>) -> i64 {
+        let mut mask: i64 = 0;
+        let dirs = Self::mask_dirs();
+        for i in 0..8 {
+            if map.get(dirs[i]).copied().unwrap_or(false) { mask |= 1 << i; }
+        }
+        mask
+    }
+
     fn get_raw(&mut self, conn: &Connection, t: Tile) -> Result<HashMap<String, bool>> {
         if let Some(m) = self.raw.get(&t) { return Ok(m.clone()); }
         let (x, y, p) = t;
-        let s: Option<String> = conn
+        let row: Option<(Option<i64>, Option<i64>)> = conn
             .query_row(
-                "SELECT walk_data FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
+                "SELECT blocked, walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
                 params![x, y, p],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let m = s.map(|s| Self::parse_json_map(&s)).unwrap_or_default();
+        let m = if let Some((blocked, walk_mask)) = row {
+            let b = blocked.unwrap_or(1);
+            let w = walk_mask.unwrap_or(0);
+            if b == 0 && w != 0 { Self::decode_mask(w) } else { HashMap::new() }
+        } else {
+            HashMap::new()
+        };
         self.raw.insert(t, m.clone());
         Ok(m)
     }
@@ -412,15 +431,7 @@ fn get_tiles_row(conn: &Connection, cols: &[String], t: Tile) -> Result<Option<V
     }
 }
 
-fn json_stringify_min(obj: &HashMap<String, bool>) -> String {
-    let mut map: serde_json::Map<String, JsonValue> = serde_json::Map::new();
-    for (k, v) in obj.iter() {
-        map.insert(k.clone(), JsonValue::Bool(*v));
-    }
-    JsonValue::Object(map).to_string()
-}
-
-fn sanitize_walk_data_for_reachable(base: &HashMap<String, bool>, tile: Tile, reachable: &HashSet<Tile>) -> String {
+fn sanitize_walk_mask_for_reachable(base: &HashMap<String, bool>, tile: Tile, reachable: &HashSet<Tile>) -> i64 {
     let (x, y, p) = tile;
     let mut m = base.clone();
     for (k, v) in base.iter() {
@@ -432,7 +443,7 @@ fn sanitize_walk_data_for_reachable(base: &HashMap<String, bool>, tile: Tile, re
             }
         }
     }
-    json_stringify_min(&m)
+    WalkCache::encode_mask(&m)
 }
 
 fn create_tiles_and_insert(
@@ -450,7 +461,7 @@ fn create_tiles_and_insert(
     let tx = dst.transaction()?;
     tx.execute(&create_sql, [])?;
 
-    let walk_idx = cols.iter().position(|c| c == "walk_data");
+    let walk_idx = cols.iter().position(|c| c == "walk_mask");
 
     {
         let mut insert_stmt = tx.prepare(&insert_sql)?;
@@ -459,8 +470,8 @@ fn create_tiles_and_insert(
             if let Some(mut row) = get_tiles_row(src, &cols, t)? {
                 if let Some(idx) = walk_idx {
                     let rec = cache.get_reconciled(src, t)?;
-                    let s = sanitize_walk_data_for_reachable(&rec, t, reachable);
-                    row[idx] = Value::Text(s);
+                    let new_mask = sanitize_walk_mask_for_reachable(&rec, t, reachable);
+                    row[idx] = Value::Integer(new_mask);
                 }
                 insert_stmt.execute(params_from_iter(row.into_iter()))?;
                 inserted += 1;

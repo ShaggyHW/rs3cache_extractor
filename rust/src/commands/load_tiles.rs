@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
@@ -38,10 +37,6 @@ struct Tile {
     blocked: Option<bool>,
     #[serde(rename = "walkMask", default)]
     walk_mask: Option<i64>,
-    #[serde(rename = "blockedMask", default)]
-    blocked_mask: Option<i64>,
-    #[serde(default)]
-    walk: Option<JsonValue>,
 }
 
 pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path) -> Result<()> {
@@ -94,35 +89,33 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
 
     drop(tx_msg);
 
-    // Drain messages as they arrive and commit per batch
-    for batch in rx_msg {
-        // Commit chunk row in its own mini-transaction when provided
-        // if let (Some(cx), Some(cz)) = (batch.chunk_x, batch.chunk_z) {
-        //     if let Some(tile_count) = batch.tile_count {
-        //         let txc = conn.transaction()?;
-        //         txc.execute(
-        //             "INSERT OR REPLACE INTO chunks (chunk_x, chunk_z, chunk_size, tile_count) VALUES (?, ?, ?, ?)",
-        //             rusqlite::params![cx, cz, batch.chunk_size, tile_count],
-        //         )?;
-        //         txc.commit()?;
-        //     }
-        // }
+    // Optimize SQLite for bulk load and avoid maintaining indexes during insert
+    conn.execute_batch(
+        "PRAGMA foreign_keys=OFF;\nDROP INDEX IF EXISTS idx_tiles_walkable;",
+    )?;
 
-        if !batch.tile_rows.is_empty() {
-            let txw = conn.transaction()?;
-            let mut tiles_stmt = txw.prepare(
-                "INSERT OR REPLACE INTO tiles (x, y, plane, flag, blocked, walk_mask, blocked_mask, walk_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            )?;
-            for row in batch.tile_rows {
-                let (x, y, plane,  flag, blocked, walk_mask, blocked_mask, walk_data) = row;
-                tiles_stmt.execute(rusqlite::params![
-                    x, y, plane,   flag, blocked, walk_mask, blocked_mask, walk_data
-                ])?;
-            }
-            drop(tiles_stmt);
-            txw.commit()?;
+    // Single transaction and prepared statement reused for entire stream
+    let txw = conn.transaction()?;
+    let mut tiles_stmt = txw.prepare(
+        "INSERT OR REPLACE INTO tiles (x, y, plane, flag, blocked, walk_mask, RegionID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )?;
+
+    // Drain messages as they arrive and insert rows
+    for batch in rx_msg {
+        if batch.tile_rows.is_empty() { continue; }
+        for row in batch.tile_rows {
+            let (x, y, plane, flag, blocked, walk_mask, region_id) = row;
+            tiles_stmt.execute(rusqlite::params![x, y, plane, flag, blocked, walk_mask, region_id])?;
         }
     }
+
+    drop(tiles_stmt);
+    txw.commit()?;
+
+    // Recreate index and restore FK checks after load
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_tiles_walkable ON tiles(x, y, plane) WHERE blocked = 0;\nPRAGMA foreign_keys=ON;",
+    )?;
 
     // Ensure producers are finished
     let _ = producer.join();
@@ -136,8 +129,7 @@ type TileRow = (
     Option<i64>, // flag
     i64,         // blocked
     Option<i64>, // walk_mask
-    Option<i64>, // blocked_mask
-    String,      // walk_data
+    i64,         // RegionID
 );
 
 struct FileBatch {
@@ -165,20 +157,15 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
     const SUB_BATCH: usize = 1_000_000;
     let mut rows: Vec<TileRow> = Vec::with_capacity(SUB_BATCH);
     for t in data.tiles.into_iter() {
-        let walk_json = t.walk.unwrap_or(JsonValue::Null);
-        let walk_data = serde_json::to_string(&walk_json)?;
         let blocked_int = if t.blocked.unwrap_or(false) { 1i64 } else { 0i64 };
         if t.blocked == Some(true) {
             continue;
         }
-        println!("Pushing: {}, {}, {}, {:?}, {}, {:?}, {:?}, {}",  t.x,
-            t.y,
-            t.plane,
-            t.flag,
-            blocked_int,
-            t.walk_mask,
-            t.blocked_mask,
-            walk_data,);
+        // Compute RegionID from x,y: regionId = (regionX << 8) + regionY,
+        // where regionX = x >> 6 and regionY = y >> 6
+        let region_x = t.x >> 6;
+        let region_y = t.y >> 6;
+        let region_id = (region_x << 8) + region_y;
         rows.push((
             t.x,
             t.y,
@@ -186,8 +173,7 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
             t.flag,
             blocked_int,
             t.walk_mask,
-            t.blocked_mask,
-            walk_data,
+            region_id,
         ));
         if rows.len() >= SUB_BATCH {
             sender.send(FileBatch {

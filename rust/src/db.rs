@@ -222,6 +222,7 @@ CREATE TABLE tiles (
     flag INTEGER,
     blocked INTEGER,
     walk_mask INTEGER,
+    RegionID INTEGER,
     PRIMARY KEY (x, y, plane)
 );
 
