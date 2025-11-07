@@ -12,85 +12,85 @@ pub fn create_tables(conn: &mut Connection) -> Result<()> {
         r#"
 -- ========== TABLES ==========
 
-CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
-  edge_id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL
-       CHECK (kind IN ('door','lodestone','npc','object','item','ifslot')),
-  node_id INTEGER NOT NULL,
+--CREATE TABLE IF NOT EXISTS abstract_teleport_edges (
+--  edge_id INTEGER PRIMARY KEY,
+--  kind TEXT NOT NULL
+--       CHECK (kind IN ('door','lodestone','npc','object','item','ifslot')),
+--  node_id INTEGER NOT NULL,
 
-  -- abstract graph geometry
-  src_x INTEGER,
-  src_y INTEGER,
-  src_plane INTEGER,
-  dst_x INTEGER NOT NULL,
-  dst_y INTEGER NOT NULL,
-  dst_plane INTEGER NOT NULL,
+--  -- abstract graph geometry
+--  src_x INTEGER,
+--  src_y INTEGER,
+--  src_plane INTEGER,
+--  dst_x INTEGER NOT NULL,
+--  dst_y INTEGER NOT NULL,
+--  dst_plane INTEGER NOT NULL,
 
-  -- planning metadata
-  cost INTEGER NOT NULL CHECK (cost >= 0),
-  requirement_id INTEGER,
-  src_entrance INTEGER,
-  dst_entrance INTEGER,
+--  -- planning metadata
+--  cost INTEGER NOT NULL CHECK (cost >= 0),
+--  requirement_id INTEGER,
+--  src_entrance INTEGER,
+--  dst_entrance INTEGER,
 
-  -- ensure one concrete node maps to at most one abstract edge
-  UNIQUE(kind, node_id)
-);
+--  -- ensure one concrete node maps to at most one abstract edge
+--  UNIQUE(kind, node_id)
+--);
 
-CREATE TABLE clusters (
-    cluster_id INTEGER PRIMARY KEY,
-    plane INTEGER NOT NULL,
-    label INTEGER,
-    tile_count INTEGER
-);
+--CREATE TABLE clusters (
+--    cluster_id INTEGER PRIMARY KEY,
+--    plane INTEGER NOT NULL,
+--    label INTEGER,
+--    tile_count INTEGER
+--);
 
-CREATE TABLE cluster_entrances (
-    entrance_id INTEGER PRIMARY KEY,
-    cluster_id INTEGER NOT NULL REFERENCES clusters(cluster_id),
-    x INTEGER NOT NULL,
-    y INTEGER NOT NULL,
-    plane INTEGER NOT NULL,
-    neighbor_dir TEXT NOT NULL CHECK (neighbor_dir IN ('N','S','E','W','TP')),
-    teleport_edge_id INTEGER REFERENCES abstract_teleport_edges(edge_id),
-    UNIQUE (cluster_id, x, y, plane, neighbor_dir)
-);
+--CREATE TABLE cluster_entrances (
+--    entrance_id INTEGER PRIMARY KEY,
+--    cluster_id INTEGER NOT NULL REFERENCES clusters(cluster_id),
+--    x INTEGER NOT NULL,
+--    y INTEGER NOT NULL,
+--    plane INTEGER NOT NULL,
+--    neighbor_dir TEXT NOT NULL CHECK (neighbor_dir IN ('N','S','E','W','TP')),
+--    teleport_edge_id INTEGER REFERENCES abstract_teleport_edges(edge_id),
+--    UNIQUE (cluster_id, x, y, plane, neighbor_dir)
+--);
 
-CREATE TABLE cluster_interconnections (
-    entrance_from INTEGER NOT NULL,
-    entrance_to INTEGER NOT NULL,
-    cost INTEGER NOT NULL,
-    PRIMARY KEY (entrance_from, entrance_to),
-    FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
-    FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id),
-    CONSTRAINT chk_cc_cost_nonneg CHECK (cost >= 0)
-);
+--CREATE TABLE cluster_interconnections (
+--    entrance_from INTEGER NOT NULL,
+--    entrance_to INTEGER NOT NULL,
+--    cost INTEGER NOT NULL,
+--    PRIMARY KEY (entrance_from, entrance_to),
+--    FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+--    FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id),
+--    CONSTRAINT chk_cc_cost_nonneg CHECK (cost >= 0)
+--);
 
-CREATE TABLE cluster_intraconnections (
-    entrance_from INTEGER NOT NULL,
-    entrance_to INTEGER NOT NULL,
-    cost INTEGER NOT NULL,
-    path_blob BLOB,
-    PRIMARY KEY (entrance_from, entrance_to),
-    FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
-    FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id),
-     CONSTRAINT chk_ci_cost_nonneg CHECK (cost >= 0)
-);
+--CREATE TABLE cluster_intraconnections (
+--    entrance_from INTEGER NOT NULL,
+--    entrance_to INTEGER NOT NULL,
+--    cost INTEGER NOT NULL,
+--    path_blob BLOB,
+--    PRIMARY KEY (entrance_from, entrance_to),
+--    FOREIGN KEY (entrance_from) REFERENCES cluster_entrances(entrance_id),
+--    FOREIGN KEY (entrance_to) REFERENCES cluster_entrances(entrance_id),
+--     CONSTRAINT chk_ci_cost_nonneg CHECK (cost >= 0)
+--);
 
-CREATE TABLE cluster_tiles (
-    cluster_id INTEGER NOT NULL REFERENCES clusters(cluster_id),
-    x INTEGER NOT NULL,
-    y INTEGER NOT NULL,
-    plane INTEGER NOT NULL,
-    PRIMARY KEY (cluster_id, x, y, plane)
-);
+--CREATE TABLE cluster_tiles (
+--    cluster_id INTEGER NOT NULL REFERENCES clusters(cluster_id),
+--    x INTEGER NOT NULL,
+--    y INTEGER NOT NULL,
+--    plane INTEGER NOT NULL,
+--    PRIMARY KEY (cluster_id, x, y, plane)
+--);
 
-CREATE TABLE meta (
-  key   TEXT PRIMARY KEY
-        CHECK (key IN (
-          'schema_version','tileset_version','map_build_at',
-          'generator_commit', 'coordinate_origin'
-        )),
-  value TEXT NOT NULL
-);
+--CREATE TABLE meta (
+--  key   TEXT PRIMARY KEY
+--        CHECK (key IN (
+--          'schema_version','tileset_version','map_build_at',
+--          'generator_commit', 'coordinate_origin'
+--        )),
+--  value TEXT NOT NULL
+--);
 
 
 CREATE TABLE teleports_door_nodes (
@@ -222,49 +222,47 @@ CREATE TABLE tiles (
     flag INTEGER,
     blocked INTEGER,
     walk_mask INTEGER,
-    blocked_mask INTEGER,
-    walk_data TEXT,
     PRIMARY KEY (x, y, plane)
 );
 
 -- ========== INDEXES ==========
 
-CREATE INDEX IF NOT EXISTS idx_abstract_teleport_dst
-  ON abstract_teleport_edges(dst_plane, dst_x, dst_y);
+--CREATE INDEX IF NOT EXISTS idx_abstract_teleport_dst
+--  ON abstract_teleport_edges(dst_plane, dst_x, dst_y);
 
-CREATE INDEX IF NOT EXISTS idx_abstract_teleport_src
-  ON abstract_teleport_edges(src_plane, src_x, src_y);
+--CREATE INDEX IF NOT EXISTS idx_abstract_teleport_src
+--  ON abstract_teleport_edges(src_plane, src_x, src_y);
 
-CREATE INDEX idx_cluster_entrances_plane_xy
-    ON cluster_entrances(plane, x, y);
+--CREATE INDEX idx_cluster_entrances_plane_xy
+--    ON cluster_entrances(plane, x, y);
 
-CREATE INDEX idx_cluster_inter_to
-    ON cluster_interconnections(entrance_to);
+--CREATE INDEX idx_cluster_inter_to
+--    ON cluster_interconnections(entrance_to);
 
 -- updated to reflect new key for cluster_intraconnections
-CREATE INDEX idx_cluster_intra_from_to
-    ON cluster_intraconnections(entrance_from, entrance_to);
+--CREATE INDEX idx_cluster_intra_from_to
+--    ON cluster_intraconnections(entrance_from, entrance_to);
 
 -- removed: idx_tiles_chunk / idx_tiles_chunk_boundary (chunk-based)
 CREATE INDEX idx_tiles_walkable
     ON tiles(x, y, plane)
     WHERE blocked = 0;
 
-CREATE INDEX idx_tiles_xyplane
-    ON tiles(x, y, plane);
+--CREATE INDEX idx_tiles_xyplane
+--    ON tiles(x, y, plane);
 
-CREATE INDEX IF NOT EXISTS idx_cluster_tiles_xyplane
-  ON cluster_tiles(plane, x, y);
+--CREATE INDEX IF NOT EXISTS idx_cluster_tiles_xyplane
+--  ON cluster_tiles(plane, x, y);
 
-CREATE INDEX IF NOT EXISTS idx_cluster_entrances_cluster_dir
-  ON cluster_entrances(cluster_id, neighbor_dir);
+--CREATE INDEX IF NOT EXISTS idx_cluster_entrances_cluster_dir
+--  ON cluster_entrances(cluster_id, neighbor_dir);
 
-CREATE INDEX IF NOT EXISTS idx_ate_kind_node
-  ON abstract_teleport_edges(kind, node_id);
+--CREATE INDEX IF NOT EXISTS idx_ate_kind_node
+--  ON abstract_teleport_edges(kind, node_id);
 CREATE INDEX IF NOT EXISTS idx_teleport_req_all
   ON teleports_requirements(id); -- lookup by id
-CREATE INDEX IF NOT EXISTS idx_ate_requirement
-  ON abstract_teleport_edges(requirement_id);
+--CREATE INDEX IF NOT EXISTS idx_ate_requirement
+--  ON abstract_teleport_edges(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_tdoor_req ON teleports_door_nodes(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_tnpc_req  ON teleports_npc_nodes(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_tobj_req  ON teleports_object_nodes(requirement_id);

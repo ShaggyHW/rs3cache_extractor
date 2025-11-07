@@ -10,3 +10,7 @@ target/rust-analyzer/flycheck0/stderr
 target/rust-analyzer/flycheck0/stdout
 worldReachableTiles_Backup.db
 tiles.db
+dist/3d/animationframes.ts
+/dist
+/node_modules/.bin
+/node_modules
