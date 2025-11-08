@@ -3,6 +3,10 @@ use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExten
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+
+use rayon::prelude::*;
 
 type Tile = (i32, i32, i32);
 
@@ -447,46 +451,116 @@ fn sanitize_walk_mask_for_reachable(base: &HashMap<String, bool>, tile: Tile, re
 }
 
 fn create_tiles_and_insert(
-    src: &Connection,
+    // Use this opened connection to read schema and index definitions
+    src_meta: &Connection,
+    // Use file path so workers can open their own read connections
+    src_db_path: &Path,
     dst: &mut Connection,
     reachable: &HashSet<Tile>,
-    cache: &mut WalkCache,
 ) -> Result<()> {
     println!("Creating destination tiles table and inserting reachable tiles...");
-    let create_sql = get_create_table_sql(src, "tiles")?;
-    let cols = get_table_columns(src, "tiles")?;
+    let create_sql = get_create_table_sql(src_meta, "tiles")?;
+    let cols = get_table_columns(src_meta, "tiles")?;
     let placeholders = (0..cols.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
     let insert_sql = format!("INSERT INTO tiles ({}) VALUES ({})", cols.join(", "), placeholders);
 
+    // Prepare destination: create table and start single writer transaction
     let tx = dst.transaction()?;
     tx.execute(&create_sql, [])?;
 
+    // Channel between producers and single DB writer (this thread)
+    let (tx_rows, rx_rows) = mpsc::channel::<Vec<Vec<Value>>>();
+
+    // Columns/indices used by workers
     let walk_idx = cols.iter().position(|c| c == "walk_mask");
+    let select_sql = format!("SELECT {} FROM tiles WHERE x=?1 AND y=?2 AND plane=?3", cols.join(", "));
 
-    {
-        let mut insert_stmt = tx.prepare(&insert_sql)?;
-        let mut inserted = 0usize;
-        for &t in reachable.iter() {
-            if let Some(mut row) = get_tiles_row(src, &cols, t)? {
-                if let Some(idx) = walk_idx {
-                    let rec = cache.get_reconciled(src, t)?;
-                    let new_mask = sanitize_walk_mask_for_reachable(&rec, t, reachable);
-                    row[idx] = Value::Integer(new_mask);
-                }
-                insert_stmt.execute(params_from_iter(row.into_iter()))?;
-                inserted += 1;
-                if inserted % 5000 == 0 {
-                    println!("Inserted {} tiles so far...", inserted);
-                }
-            }
+    // Share reachable as read-only among workers
+    let reachable_arc = std::sync::Arc::new(reachable.clone());
+
+    // Spawn producers in a separate thread so this thread can consume and write
+    let producer = {
+        let tx_rows = tx_rows.clone();
+        let select_sql = select_sql.clone();
+        let cols_len = cols.len();
+        let src_path = src_db_path.to_path_buf();
+        thread::spawn(move || {
+            // Process tiles in parallel and stream to writer in batches
+            let mut tiles: Vec<Tile> = reachable_arc.iter().copied().collect();
+            tiles.shrink_to_fit();
+            const BATCH: usize = 10_000;
+
+            tiles
+                .par_chunks(50_000)
+                .for_each_with(tx_rows.clone(), |sender, chunk| {
+                    // Each worker opens its own read-only connection and prepares statements
+                    let conn = match Connection::open(&src_path) {
+                        Ok(c) => c,
+                        Err(e) => { eprintln!("worker open src db error: {}", e); return; }
+                    };
+                    let mut sel = match conn.prepare(&select_sql) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("worker prepare select error: {}", e); return; }
+                    };
+
+                    let mut cache = WalkCache::new();
+                    let mut out: Vec<Vec<Value>> = Vec::with_capacity(BATCH);
+                    for &t in chunk.iter() {
+                        match sel.query(params![t.0, t.1, t.2]) {
+                            Ok(mut rows) => match rows.next() {
+                                Ok(Some(r)) => {
+                                    let mut row = match read_row_values(r, cols_len) {
+                                        Ok(v) => v,
+                                        Err(e) => { eprintln!("read row error for {:?}: {}", t, e); continue; }
+                                    };
+                                    if let Some(idx) = walk_idx {
+                                        match cache.get_reconciled(&conn, t) {
+                                            Ok(rec) => {
+                                                let nm = sanitize_walk_mask_for_reachable(&rec, t, &reachable_arc);
+                                                row[idx] = Value::Integer(nm);
+                                            }
+                                            Err(e) => { eprintln!("reconcile error for {:?}: {}", t, e); }
+                                        }
+                                    }
+                                    out.push(row);
+                                    if out.len() >= BATCH {
+                                        if let Err(e) = sender.send(std::mem::take(&mut out)) { eprintln!("send batch error: {}", e); break; }
+                                    }
+                                }
+                                Ok(None) => { /* no row, skip */ }
+                                Err(e) => { eprintln!("rows.next() error for {:?}: {}", t, e); }
+                            },
+                            Err(e) => { eprintln!("select prepare/exec error for {:?}: {}", t, e); }
+                        }
+                    }
+                    if !out.is_empty() { let _ = sender.send(out); }
+                });
+            // Dropping tx_rows closes channel
+        })
+    };
+
+    drop(tx_rows);
+
+    // Consume and insert on this thread (owning the transaction/connection)
+    let mut insert_stmt = tx.prepare(&insert_sql)?;
+    let mut inserted = 0usize;
+    for batch in rx_rows {
+        for row in batch.into_iter() {
+            insert_stmt.execute(params_from_iter(row.into_iter()))?;
+            inserted += 1;
+            if inserted % 5000 == 0 { println!("Inserted {} tiles so far...", inserted); }
         }
-        println!("Finished inserting {} tiles", inserted);
     }
-
+    drop(insert_stmt);
     tx.commit()?;
     println!("Committed tiles insertion transaction");
+    println!("Finished inserting {} tiles", inserted);
 
-    let mut idx_stmt = src.prepare(
+    // Ensure producers are done
+    let _ = producer.join();
+
+    // Recreate tile indexes on destination from source metadata
+    let mut idx_stmt = src_meta.prepare(
         "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='tiles' AND sql IS NOT NULL",
     )?;
     let mut rows = idx_stmt.query([])?;
@@ -594,8 +668,7 @@ pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32
     dst.execute_batch("PRAGMA foreign_keys=OFF;")?;
     println!("Disabled foreign key checks on destination");
 
-    let mut cache = WalkCache::new();
-    create_tiles_and_insert(&src, &mut dst, &reachable, &mut cache)?;
+    create_tiles_and_insert(&src, src_db, &mut dst, &reachable)?;
 
     let mut skip = HashSet::new();
     skip.insert("tiles".to_string());

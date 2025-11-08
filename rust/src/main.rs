@@ -60,15 +60,10 @@ enum Commands {
         /// Start plane (default: 0)
         #[arg(long, default_value_t = 0)]
         start_plane: i32,
-    },
+    }
 
-    /// Cluster pipeline tools (see subcommands)
-    Cluster {
-        #[command(flatten)]
-        common: commands::cluster::CommonOpts,
-        #[command(subcommand)]
-        sub: commands::cluster::ClusterCommand,
-    },
+
+   
 }
 
 fn main() -> Result<()> {
@@ -89,7 +84,6 @@ fn main() -> Result<()> {
             let out_path = out.unwrap_or(root.join("worldReachableTiles.db"));
             commands::tile_cleaner::cmd_tile_cleaner(&src_path, &out_path, start_x, start_y, start_plane)
         }
-        Commands::Cluster { common, sub } => commands::cluster::cmd_cluster(common, sub),
-    }
+        }
 }
 // (All DB schema and loading logic is now in `db` and `commands` modules.)
