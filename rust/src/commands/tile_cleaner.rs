@@ -91,17 +91,16 @@ impl WalkCache {
     fn get_raw(&mut self, conn: &Connection, t: Tile) -> Result<HashMap<String, bool>> {
         if let Some(m) = self.raw.get(&t) { return Ok(m.clone()); }
         let (x, y, p) = t;
-        let row: Option<(Option<i64>, Option<i64>)> = conn
+        let row: Option<Option<i64>> = conn
             .query_row(
-                "SELECT blocked, walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
+                "SELECT walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
                 params![x, y, p],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok(row.get(0)?),
             )
             .optional()?;
-        let m = if let Some((blocked, walk_mask)) = row {
-            let b = blocked.unwrap_or(1);
+        let m = if let Some(walk_mask) = row {
             let w = walk_mask.unwrap_or(0);
-            if b == 0 && w != 0 { Self::decode_mask(w) } else { HashMap::new() }
+            if w != 0 { Self::decode_mask(w) } else { HashMap::new() }
         } else {
             HashMap::new()
         };

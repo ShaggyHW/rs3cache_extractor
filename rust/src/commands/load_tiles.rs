@@ -31,10 +31,6 @@ struct Tile {
     x: i64,
     y: i64,
     plane: i64,
-    #[serde(default)]
-    flag: Option<i64>,
-    #[serde(default)]
-    blocked: Option<bool>,
     #[serde(rename = "walkMask", default)]
     walk_mask: Option<i64>,
 }
@@ -97,15 +93,15 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
     // Single transaction and prepared statement reused for entire stream
     let txw = conn.transaction()?;
     let mut tiles_stmt = txw.prepare(
-        "INSERT OR REPLACE INTO tiles (x, y, plane, flag, blocked, walk_mask, RegionID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO tiles (x, y, plane, walk_mask, RegionID) VALUES (?, ?, ?, ?, ?)",
     )?;
 
     // Drain messages as they arrive and insert rows
     for batch in rx_msg {
         if batch.tile_rows.is_empty() { continue; }
         for row in batch.tile_rows {
-            let (x, y, plane, flag, blocked, walk_mask, region_id) = row;
-            tiles_stmt.execute(rusqlite::params![x, y, plane, flag, blocked, walk_mask, region_id])?;
+            let (x, y, plane, walk_mask, region_id) = row;
+            tiles_stmt.execute(rusqlite::params![x, y, plane, walk_mask, region_id])?;
         }
     }
 
@@ -114,7 +110,7 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
 
     // Recreate index and restore FK checks after load
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_tiles_walkable ON tiles(x, y, plane) WHERE blocked = 0;\nPRAGMA foreign_keys=ON;",
+        "CREATE INDEX IF NOT EXISTS idx_tiles_walkable ON tiles(x, y, plane);\nPRAGMA foreign_keys=ON;",
     )?;
 
     // Ensure producers are finished
@@ -126,8 +122,6 @@ type TileRow = (
     i64,         // x
     i64,         // y
     i64,         // plane
-    Option<i64>, // flag
-    i64,         // blocked
     Option<i64>, // walk_mask
     i64,         // RegionID
 );
@@ -157,10 +151,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
     const SUB_BATCH: usize = 1_000_000;
     let mut rows: Vec<TileRow> = Vec::with_capacity(SUB_BATCH);
     for t in data.tiles.into_iter() {
-        let blocked_int = if t.blocked.unwrap_or(false) { 1i64 } else { 0i64 };
-        if t.blocked == Some(true) {
-            continue;
-        }
         // Compute RegionID from x,y: regionId = (regionX << 8) + regionY,
         // where regionX = x >> 6 and regionY = y >> 6
         let region_x = t.x >> 6;
@@ -170,8 +160,6 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
             t.x,
             t.y,
             t.plane,
-            t.flag,
-            blocked_int,
             t.walk_mask,
             region_id,
         ));

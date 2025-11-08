@@ -219,8 +219,6 @@ CREATE TABLE tiles (
     x INTEGER,
     y INTEGER,
     plane INTEGER,
-    flag INTEGER,
-    blocked INTEGER,
     walk_mask INTEGER,
     RegionID INTEGER,
     PRIMARY KEY (x, y, plane)
@@ -246,8 +244,7 @@ CREATE TABLE tiles (
 
 -- removed: idx_tiles_chunk / idx_tiles_chunk_boundary (chunk-based)
 CREATE INDEX idx_tiles_walkable
-    ON tiles(x, y, plane)
-    WHERE blocked = 0;
+    ON tiles(x, y, plane);
 
 --CREATE INDEX idx_tiles_xyplane
 --    ON tiles(x, y, plane);

@@ -28,13 +28,11 @@
   - `x INTEGER` — world X coordinate.
   - `y INTEGER` — world Y coordinate.
   - `plane INTEGER` — Z-level (0=ground).
-  - `flag INTEGER` — raw tile flags (source-provided).
-  - `blocked INTEGER` — 0=walkable, non-0=blocked.
   - `walk_mask INTEGER` — bitmask of allowed movements from this tile.
   - `RegionID INTEGER` — region identifier.
 - **Primary key**: `(x, y, plane)`.
 - **Index**:
-  - `idx_tiles_walkable ON tiles(x, y, plane) WHERE blocked = 0` (partial index for walkable tiles).
+  - `idx_tiles_walkable ON tiles(x, y, plane)` (partial index for walkable tiles).
 - **`walk_mask` bit mapping (bit 0..7)**:
   - 0: `left`
   - 1: `bottom`
@@ -122,7 +120,6 @@ These tables are copied to support additional movements beyond adjacency. All ha
   ```
 
 ## Semantics Notes
-- `blocked = 0` indicates the tile is not blocked and considered for adjacency traversal.
 - `walk_mask` bits reflect allowed neighbor moves after reconciliation and reachability sanitization; bits may differ from the source `tiles.db` because unreachable edges are cleared.
 - Coordinates are world space; `plane` is the elevation level.
 
