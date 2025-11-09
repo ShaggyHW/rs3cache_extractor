@@ -229,12 +229,19 @@ fn get_object_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>>
                 dests.push((dx, dy, d_plane));
             }
         }
+        let mut origins: Vec<Tile> = Vec::new();
         for ox in o_min_x..=o_max_x {
             for oy in o_min_y..=o_max_y {
-                let origin = (ox, oy, o_plane);
-                let e = adj.entry(origin).or_default();
-                e.extend(dests.iter().copied());
+                origins.push((ox, oy, o_plane));
             }
+        }
+        for &origin in origins.iter() {
+            let e = adj.entry(origin).or_default();
+            e.extend(dests.iter().copied());
+        }
+        for &dest in dests.iter() {
+            let e = adj.entry(dest).or_default();
+            e.extend(origins.iter().copied());
         }
     }
     Ok(adj)
@@ -281,12 +288,19 @@ fn get_npc_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
                 dests.push((dx, dy, d_plane));
             }
         }
+        let mut origins: Vec<Tile> = Vec::new();
         for ox in o_min_x..=o_max_x {
             for oy in o_min_y..=o_max_y {
-                let origin = (ox, oy, o_plane);
-                let e = adj.entry(origin).or_default();
-                e.extend(dests.iter().copied());
+                origins.push((ox, oy, o_plane));
             }
+        }
+        for &origin in origins.iter() {
+            let e = adj.entry(origin).or_default();
+            e.extend(dests.iter().copied());
+        }
+        for &dest in dests.iter() {
+            let e = adj.entry(dest).or_default();
+            e.extend(origins.iter().copied());
         }
     }
     Ok(adj)
