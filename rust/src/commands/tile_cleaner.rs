@@ -306,6 +306,35 @@ fn get_npc_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
     Ok(adj)
 }
 
+fn get_item_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
+    let mut out: Vec<Tile> = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_item_nodes",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let d_min_x: Option<i64> = r.get(0)?;
+        let d_max_x: Option<i64> = r.get(1)?;
+        let d_min_y: Option<i64> = r.get(2)?;
+        let d_max_y: Option<i64> = r.get(3)?;
+        let d_plane: Option<i64> = r.get(4)?;
+        if [d_min_x, d_max_x, d_min_y, d_max_y, d_plane].iter().any(|v| v.is_none()) { continue; }
+        let (d_min_x, d_max_x, d_min_y, d_max_y, d_plane) = (
+            d_min_x.unwrap() as i32,
+            d_max_x.unwrap() as i32,
+            d_min_y.unwrap() as i32,
+            d_max_y.unwrap() as i32,
+            d_plane.unwrap() as i32,
+        );
+        for dx in d_min_x..=d_max_x {
+            for dy in d_min_y..=d_max_y {
+                out.push((dx, dy, d_plane));
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
     let mut out: Vec<Tile> = Vec::new();
     let mut stmt = conn.prepare(
@@ -348,6 +377,9 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
     println!("Loading NPC transitions...");
     let npc = get_npc_transitions(conn)?;
     println!("Loaded {} NPC transition origins with {} total destinations", npc.len(), npc.values().map(|v| v.len()).sum::<usize>());
+    println!("Loading item teleport destinations...");
+    let item_dests = get_item_dest_tiles(conn)?;
+    println!("Loaded {} item teleport destinations", item_dests.len());
     println!("Loading interface slot destinations...");
     let ifslot = get_ifslot_dest_tiles(conn)?;
     println!("Loaded {} interface slot destinations", ifslot.len());
@@ -358,6 +390,10 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
 
     q.push_back(start);
     vis.insert(start);
+
+    for &n in &item_dests {
+        if vis.insert(n) { q.push_back(n); }
+    }
 
     let mut ifslot_enqueued = false;
 
