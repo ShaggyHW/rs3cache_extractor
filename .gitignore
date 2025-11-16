@@ -14,3 +14,4 @@ dist/3d/animationframes.ts
 /dist
 /node_modules/.bin
 /node_modules
+/extract_map
