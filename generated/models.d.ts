@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\models.jsonc'
+// This source data is located at '../src/opcodes/models.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type models = {
@@ -11,6 +11,7 @@ export type models = {
 	unkCount1: number,
 	unkCount2: number,
 	unkCount3: number,
+	unkCount4: (number|0),
 	meshes: {
 		unkint: number,
 		materialArgument: number,
@@ -75,4 +76,5 @@ export type models = {
 	unk1Buffer: Uint8Array[],
 	unk2Buffer: Uint8Array[],
 	unk3Buffer: Uint8Array[],
+	unk4Buffer: Buffer[],
 };

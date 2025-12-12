@@ -614,6 +614,7 @@ export class CS2Api {
             unk10data: null,
             unk11data: null,
             unk12data: null,
+            unk13data: null,
             unk15data: null,
             unk16data: null,
             unk2: 0,

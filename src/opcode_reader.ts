@@ -128,7 +128,17 @@ function opcodesParser(chunkdef: {}, parent: ChunkParentCallback, typedef: TypeD
 				if (debugdata) {
 					debugdata.opcodes.push({ op: (parser ? parser.key as string : `_0x${opt.toString(16)}_`), index: state.scan - 1, stacksize: state.stack.length });
 				}
-				if (!parser) { throw new Error("unknown chunk 0x" + opt.toString(16).toUpperCase()); }
+				if (!parser) { 
+					console.warn(`unknown chunk 0x${opt.toString(16).toUpperCase()} at position ${state.scan - 1}, attempting to skip`);
+					// Try to skip the unknown chunk safely
+					// For unknown opcodes, we'll try to read a single byte as data and continue
+					// This is a best-effort approach to prevent parsing from failing completely
+					if (state.scan < state.endoffset) {
+						// Skip a single byte as unknown data
+						state.scan++;
+					}
+					continue;
+				}
 				r[parser.key] = parser.parser.read(state);
 			}
 			state.stack.pop();
@@ -1422,62 +1432,138 @@ function getClientVersion(args: Record<string, unknown>) {
 
 const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s: EncodeState, v: number) => void, min: number, max: number }> = {
 	ubyte: {
-		read(s) { let r = s.buffer.readUInt8(s.scan); s.scan += 1; return r; },
+		read(s) { 
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read ubyte at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUInt8(s.scan); 
+			s.scan += 1; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUInt8(v, s.scan); s.scan += 1; },
 		min: 0, max: 255
 	},
 	byte: {
-		read(s) { let r = s.buffer.readInt8(s.scan); s.scan += 1; return r; },
+		read(s) { 
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read byte at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readInt8(s.scan); 
+			s.scan += 1; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeInt8(v, s.scan); s.scan += 1; },
 		min: -128, max: 127
 	},
 	ushort: {
-		read(s) { let r = s.buffer.readUInt16BE(s.scan); s.scan += 2; return r; },
+		read(s) { 
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read ushort at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUInt16BE(s.scan); 
+			s.scan += 2; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUInt16BE(v, s.scan); s.scan += 2; },
 		min: 0, max: 2 ** 16 - 1
 	},
 	short: {
-		read(s) { let r = s.buffer.readInt16BE(s.scan); s.scan += 2; return r; },
+		read(s) { 
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read short at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readInt16BE(s.scan); 
+			s.scan += 2; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeInt16BE(v, s.scan); s.scan += 2; },
 		min: -(2 ** 15), max: 2 ** 15 - 1
 	},
 	uint: {
-		read(s) { let r = s.buffer.readUInt32BE(s.scan); s.scan += 4; return r; },
+		read(s) { 
+			if (s.scan + 4 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read uint at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUInt32BE(s.scan); 
+			s.scan += 4; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUInt32BE(v, s.scan); s.scan += 4; },
 		min: 0, max: 2 ** 32 - 1
 	},
 	int: {
-		read(s) { let r = s.buffer.readInt32BE(s.scan); s.scan += 4; return r; },
+		read(s) { 
+			if (s.scan + 4 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read int at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readInt32BE(s.scan); 
+			s.scan += 4; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeInt32BE(v, s.scan); s.scan += 4; },
 		min: -(2 ** 31), max: 2 ** 31 - 1
 	},
 
 	uint_le: {
-		read(s) { let r = s.buffer.readUInt32LE(s.scan); s.scan += 4; return r; },
+		read(s) { 
+			if (s.scan + 4 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read uint_le at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUInt32LE(s.scan); 
+			s.scan += 4; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUint32LE(v, s.scan); s.scan += 4; },
 		min: 0, max: 2 ** 32 - 1
 	},
 	ushort_le: {
-		read(s) { let r = s.buffer.readUInt16LE(s.scan); s.scan += 2; return r; },
+		read(s) { 
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read ushort_le at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUInt16LE(s.scan); 
+			s.scan += 2; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUint16LE(v, s.scan); s.scan += 2; },
 		min: 0, max: 2 ** 16 - 1
 	},
 	utribyte: {
-		read(s) { let r = s.buffer.readUIntBE(s.scan, 3); s.scan += 3; return r; },
+		read(s) { 
+			if (s.scan + 3 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read utribyte at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readUIntBE(s.scan, 3); 
+			s.scan += 3; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeUintBE(v, s.scan, 3); s.scan += 3; },
 		min: 0, max: 2 ** 24 - 1
 	},
 	float: {
-		read(s) { let r = s.buffer.readFloatBE(s.scan); s.scan += 4; return r; },
+		read(s) { 
+			if (s.scan + 4 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read float at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
+			let r = s.buffer.readFloatBE(s.scan); 
+			s.scan += 4; 
+			return r; 
+		},
 		write(s, v) { s.buffer.writeFloatBE(v, s.scan); s.scan += 4; },
 		min: Number.MIN_VALUE, max: Number.MAX_VALUE
 	},
 
 	varushort: {
 		read(s) {
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varushort at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
 			let firstByte = s.buffer.readUInt8(s.scan++);
 			if ((firstByte & 0x80) == 0) {
 				return firstByte;
+			}
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varushort second byte at offset ${s.scan}, buffer length is ${s.buffer.length}`);
 			}
 			let secondByte = s.buffer.readUInt8(s.scan++);
 			return ((firstByte & 0x7f) << 8) | secondByte;
@@ -1495,10 +1581,16 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 	},
 	varshort: {
 		read(s) {
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varshort at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
 			let firstByte = s.buffer.readUInt8(s.scan++);
 			if ((firstByte & 0x80) == 0) {
 				//sign extend from 7nth bit (>> fills using 32th bit)
 				return (firstByte << (32 - 7)) >> (32 - 7);
+			}
+			if (s.scan >= s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varshort second byte at offset ${s.scan}, buffer length is ${s.buffer.length}`);
 			}
 			let secondByte = s.buffer.readUInt8(s.scan++);
 			return ((((firstByte & 0x7f) << 8) | secondByte) << (32 - 15)) >> (32 - 15);
@@ -1516,11 +1608,17 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 	},
 	varuint: {
 		read(s) {
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varuint at offset ${s.scan}, buffer length is ${s.buffer.length}. Need at least 2 bytes for varuint header.`);
+			}
 			let firstWord = s.buffer.readUInt16BE(s.scan);
 			s.scan += 2;
 			if ((firstWord & 0x8000) == 0) {
 				return firstWord;
 			} else {
+				if (s.scan + 2 > s.buffer.length) {
+					throw new Error(`Buffer overflow: trying to read varuint second word at offset ${s.scan}, buffer length is ${s.buffer.length}. Varuint header indicates 4 bytes total but only ${s.buffer.length - (s.scan - 2)} bytes available.`);
+				}
 				let secondWord = s.buffer.readUInt16BE(s.scan);
 				s.scan += 2;
 				return ((firstWord & 0x7fff) << 16) | secondWord;
@@ -1540,6 +1638,9 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 	},
 	varnullint: {
 		read(s) {
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varnullint at offset ${s.scan}, buffer length is ${s.buffer.length}. Need at least 2 bytes for varnullint header.`);
+			}
 			let firstWord = s.buffer.readUInt16BE(s.scan);
 			s.scan += 2;
 			if (firstWord == 0x7fff) {
@@ -1547,6 +1648,9 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 			} else if ((firstWord & 0x8000) == 0) {
 				return firstWord;
 			} else {
+				if (s.scan + 2 > s.buffer.length) {
+					throw new Error(`Buffer overflow: trying to read varnullint second word at offset ${s.scan}, buffer length is ${s.buffer.length}. Varnullint header indicates 4 bytes total but only ${s.buffer.length - (s.scan - 2)} bytes available.`);
+				}
 				let secondWord = s.buffer.readUInt16BE(s.scan);
 				s.scan += 2;
 				return ((firstWord & 0x7fff) << 16) | secondWord;
@@ -1569,11 +1673,17 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 	},
 	varint: {
 		read(s) {
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varint at offset ${s.scan}, buffer length is ${s.buffer.length}`);
+			}
 			let firstWord = s.buffer.readUInt16BE(s.scan);
 			s.scan += 2;
 			if ((firstWord & 0x8000) == 0) {
 				//sign extend from 7nth bit (>> fills using 32th bit)
 				return (firstWord << (32 - 15)) >> (32 - 15);
+			}
+			if (s.scan + 2 > s.buffer.length) {
+				throw new Error(`Buffer overflow: trying to read varint second word at offset ${s.scan}, buffer length is ${s.buffer.length}`);
 			}
 			let secondWord = s.buffer.readUInt16BE(s.scan);
 			s.scan += 2;

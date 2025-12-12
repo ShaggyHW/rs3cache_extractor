@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\mapsquare_locations.json'
+// This source data is located at '../src/opcodes/mapsquare_locations.json'
 // run `npm run filetypes` to rebuild
 
 export type mapsquare_locations = {

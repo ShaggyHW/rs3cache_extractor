@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\mapzones.json'
+// This source data is located at '../src/opcodes/mapzones.json'
 // run `npm run filetypes` to rebuild
 
 export type mapzones = {

@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\structs.jsonc'
+// This source data is located at '../src/opcodes/structs.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type structs = {

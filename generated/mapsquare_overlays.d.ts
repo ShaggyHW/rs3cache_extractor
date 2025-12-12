@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\mapsquare_overlays.jsonc'
+// This source data is located at '../src/opcodes/mapsquare_overlays.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type mapsquare_overlays = {

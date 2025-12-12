@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\avatars.jsonc'
+// This source data is located at '../src/opcodes/avatars.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type avatars = {

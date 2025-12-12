@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\items.jsonc'
+// This source data is located at '../src/opcodes/items.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type items = {

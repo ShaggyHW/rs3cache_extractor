@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\interfaces.jsonc'
+// This source data is located at '../src/opcodes/interfaces.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type interfaces = {
@@ -91,6 +91,9 @@ export type interfaces = {
 		data: Uint8Array,
 		str: string,
 		data2: Uint8Array,
+	} | null,
+	unk13data: {
+		data: Uint8Array,
 	} | null,
 	unk15data: {
 		data: Uint8Array,

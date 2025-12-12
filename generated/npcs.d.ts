@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\npcs.jsonc'
+// This source data is located at '../src/opcodes/npcs.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type npcs = {
@@ -144,7 +144,8 @@ export type npcs = {
 	unknown_B6?: true | null
 	unknown_B7?: number | null
 	unknown_B8?: number | null
-	unknown_B9?: number | null
+	unknown_B9?: true | null
+	unknown_BA?: number | null
 	unknown_DB?: number | null
 	extra?: {
 		prop: number,

@@ -8,9 +8,13 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 	const chunkSize = (engine.classicData ? classicChunkSize : rs2ChunkSize);
 	await save.mkDir("walk");
 
+	let processedCount = 0;
+	let errorCount = 0;
+
 	const processSquare = async (cx: number, cz: number) => {
-		const parsed = await parseMapsquare(engine, cx, cz, { collision: true, map2d: true, minimap: true, hashboxes: true, skybox: true, invisibleLayers: true, padfloor: true });
-		if (!parsed.chunk) { return; }
+		try {
+			const parsed = await parseMapsquare(engine, cx, cz, { collision: true, map2d: true, minimap: true, hashboxes: true, skybox: true, invisibleLayers: true, padfloor: true });
+			if (!parsed.chunk) { return; }
 
 		const grid = parsed.grid as TileGrid;
 		const rect = parsed.chunk.tilerect;
@@ -89,6 +93,12 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 		const out = JSON.stringify({ chunk: { x: cx, z: cz, chunkSize }, tiles });
 		await save.writeFile(`walk/${cx}-${cz}.json`, out);
 		output.log("walkflags:", cx, cz, "tiles:", tiles.length);
+		processedCount++;
+		} catch (error) {
+			output.log("Error processing square", cx, cz, ":", error);
+			errorCount++;
+			// Continue processing other squares even if this one fails
+		}
 	};
 
 	const coords: { x: number, z: number }[] = [];
@@ -108,9 +118,16 @@ export async function exportWalkFlags(output: ScriptOutput, save: ScriptFS, sour
 			taskIndex += 1;
 			if (currentIndex >= coords.length) { return; }
 			const coord = coords[currentIndex];
-			await processSquare(coord.x, coord.z);
+			try {
+				await processSquare(coord.x, coord.z);
+			} catch (error) {
+				output.log("Worker error processing square", coord.x, coord.z, ":", error);
+				// Continue with next square even if this one fails
+			}
 		}
 	};
 	const workerCount = Math.min(maxConcurrency, coords.length);
 	await Promise.all(Array.from({ length: workerCount }, () => worker()));
+	
+	output.log(`Export complete: ${processedCount} squares processed, ${errorCount} errors`);
 }

@@ -1756,7 +1756,14 @@ export type WorldLocation = {
 export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, locations: mapsquare_locations["locations"], originx: number, originz: number, collision = false) {
 	let locs: WorldLocation[] = [];
 
-	let locdatas = await Promise.all(locations.map(q => resolveMorphedObject(engine, q.id)));
+	let locdatas = await Promise.all(locations.map(async q => {
+		try {
+			return await resolveMorphedObject(engine, q.id);
+		} catch (error) {
+			console.warn(`Failed to resolve morphed object ${q.id} in mapsquareObjects:`, error);
+			return { rawloc: null, morphedloc: null, resolvedid: q.id };
+		}
+	}));
 	for (let locindex = 0; locindex < locations.length; locindex++) {
 		let loc = locations[locindex];
 		let { morphedloc, rawloc, resolvedid } = locdatas[locindex];
@@ -1812,7 +1819,7 @@ export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, loca
 			]
 			const straightWallDirs = [1, 4, 3, 2];
 
-			if (collision && !rawloc.probably_nocollision) {
+			if (collision && rawloc && !rawloc.probably_nocollision) {
 				for (let dz = 0; dz < sizez; dz++) {
 					for (let dx = 0; dx < sizex; dx++) {
 						let tile = grid.getTile(inst.x + originx + dx, inst.y + originz + dz, callingtile.effectiveLevel);

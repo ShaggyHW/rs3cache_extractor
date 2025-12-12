@@ -11,6 +11,11 @@ cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.go
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 
 
+
+npm run nodegl -- dist/maprender \
+  -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ \
+  -c extract_map/mapconfig.jsonc
+
 ```
 
 # RuneScape Model Viewer (.js)

@@ -1,5 +1,5 @@
 // GENERATED DO NOT EDIT
-// This source data is located at '..\src\opcodes\objects.jsonc'
+// This source data is located at '../src/opcodes/objects.jsonc'
 // run `npm run filetypes` to rebuild
 
 export type objects = {
@@ -185,6 +185,7 @@ export type objects = {
 	singleuse_CA?: number | null
 	unknown_CB?: true | null
 	unknown_CC?: Uint8Array[] | null
+	unknown_CD?: number | null
 	extra?: {
 		prop: number,
 		intvalue: number | null,
