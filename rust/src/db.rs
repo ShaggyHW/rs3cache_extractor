@@ -28,7 +28,7 @@ pub fn create_tables(conn: &mut Connection) -> Result<()> {
 
 --  -- planning metadata
 --  cost INTEGER NOT NULL CHECK (cost >= 0),
---  requirement_id INTEGER,
+--  requirements TEXT,
 --  src_entrance INTEGER,
 --  dst_entrance INTEGER,
 
@@ -114,7 +114,7 @@ CREATE TABLE teleports_door_nodes (
     cost INTEGER,
     next_node_type TEXT,
     next_node_id INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_ifslot_nodes (
@@ -131,11 +131,13 @@ CREATE TABLE teleports_ifslot_nodes (
     cost INTEGER,
     next_node_type TEXT,
     next_node_id INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_item_nodes (
     id INTEGER PRIMARY KEY,
+    match_type TEXT,
+    name TEXT,
     item_id INTEGER,
     action TEXT,
     dest_min_x INTEGER,
@@ -146,7 +148,7 @@ CREATE TABLE teleports_item_nodes (
     next_node_type TEXT,
     next_node_id INTEGER,
     cost INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_lodestone_nodes (
@@ -158,7 +160,7 @@ CREATE TABLE teleports_lodestone_nodes (
     cost INTEGER,
     next_node_type TEXT,
     next_node_id INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_npc_nodes (
@@ -181,7 +183,7 @@ CREATE TABLE teleports_npc_nodes (
     orig_plane INTEGER,
     next_node_type TEXT,
     next_node_id INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_object_nodes (
@@ -204,7 +206,7 @@ CREATE TABLE teleports_object_nodes (
     cost INTEGER,
     next_node_type TEXT,
     next_node_id INTEGER,
-    requirement_id INTEGER
+    requirements TEXT
 );
 
 CREATE TABLE teleports_requirements (
@@ -260,13 +262,13 @@ CREATE INDEX idx_tiles_walkable
 CREATE INDEX IF NOT EXISTS idx_teleport_req_all
   ON teleports_requirements(id); -- lookup by id
 --CREATE INDEX IF NOT EXISTS idx_ate_requirement
---  ON abstract_teleport_edges(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_tdoor_req ON teleports_door_nodes(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_tnpc_req  ON teleports_npc_nodes(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_tobj_req  ON teleports_object_nodes(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_titem_req ON teleports_item_nodes(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_tif_req   ON teleports_ifslot_nodes(requirement_id);
-CREATE INDEX IF NOT EXISTS idx_tlode_req ON teleports_lodestone_nodes(requirement_id);
+--  ON abstract_teleport_edges(requirements);
+CREATE INDEX IF NOT EXISTS idx_tdoor_req ON teleports_door_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tnpc_req  ON teleports_npc_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tobj_req  ON teleports_object_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_titem_req ON teleports_item_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tif_req   ON teleports_ifslot_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tlode_req ON teleports_lodestone_nodes(requirements);
 
 -- ========== VIEW ==========
 
@@ -274,28 +276,28 @@ CREATE VIEW teleports_all AS
 SELECT 'door' AS kind, id,
        tile_outside_x AS src_x, tile_outside_y AS src_y, tile_outside_plane AS src_plane,
        tile_inside_x AS dst_x, tile_inside_y AS dst_y, tile_inside_plane AS dst_plane,
-       cost, requirement_id
+       cost, requirements
 FROM teleports_door_nodes
 UNION ALL
 SELECT 'lodestone', id, NULL, NULL, NULL,
-       dest_x, dest_y, dest_plane, cost, requirement_id
+       dest_x, dest_y, dest_plane, cost, requirements
 FROM teleports_lodestone_nodes
 UNION ALL
 SELECT 'npc', id, orig_min_x, orig_min_y, orig_plane,
-       dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+       dest_min_x, dest_min_y, dest_plane, cost, requirements
 FROM teleports_npc_nodes
 UNION ALL
 SELECT 'object', id, orig_min_x, orig_min_y, orig_plane,
-       dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+       dest_min_x, dest_min_y, dest_plane, cost, requirements
 FROM teleports_object_nodes
 UNION ALL
 SELECT 'item', id, NULL, NULL, NULL,
-       dest_min_x, dest_min_y, dest_plane, cost, requirement_id
+       dest_min_x, dest_min_y, dest_plane, cost, requirements
 FROM teleports_item_nodes
 UNION ALL
 SELECT 'ifslot', id, NULL, NULL, NULL,
        CAST(dest_min_x AS INTEGER), CAST(dest_min_y AS INTEGER),
-       CAST(dest_plane AS INTEGER), cost, requirement_id
+       CAST(dest_plane AS INTEGER), cost, requirements
 FROM teleports_ifslot_nodes
 WHERE dest_min_x IS NOT NULL;
 

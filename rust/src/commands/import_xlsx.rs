@@ -22,6 +22,25 @@ const TELEPORT_NODE_TABLES: &[&str] = &[
     "teleports_requirements",
 ];
 
+fn normalize_requirements_value(v: &str) -> Result<String> {
+    let trimmed = v.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for p in trimmed.split(';') {
+        let p = p.trim();
+        if p.is_empty() {
+            bail!("Invalid requirements value: '{}'", v);
+        }
+        if !p.chars().all(|c| c.is_ascii_digit()) {
+            bail!("Invalid requirements value: '{}'", v);
+        }
+        parts.push(p);
+    }
+    Ok(parts.join(";"))
+}
+
 #[derive(Clone, Debug)]
 struct Column {
     name: String,
@@ -44,6 +63,25 @@ fn normalize_specials(table_name: &str, row: &mut BTreeMap<String, rusqlite::typ
     if let Some(v) = row.get_mut("next_node_type") {
         if let rusqlite::types::Value::Text(ref mut s) = v {
             *s = s.trim().to_ascii_lowercase();
+        }
+    }
+
+    if let Some(v) = row.get_mut("requirements") {
+        match v {
+            rusqlite::types::Value::Text(ref mut s) => {
+                let normalized = normalize_requirements_value(s)?;
+                *s = normalized;
+            }
+            rusqlite::types::Value::Integer(i) => {
+                let normalized = normalize_requirements_value(&i.to_string())?;
+                *v = rusqlite::types::Value::Text(normalized);
+            }
+            rusqlite::types::Value::Null => {
+                // allow
+            }
+            _ => {
+                bail!("Invalid requirements value type");
+            }
         }
     }
     Ok(())
@@ -458,6 +496,10 @@ fn validate_specials(table_name: &str, row: &BTreeMap<String, rusqlite::types::V
                 );
             }
         }
+    }
+
+    if let Some(reqs) = get_text("requirements") {
+        let _ = normalize_requirements_value(&reqs)?;
     }
     Ok(())
 }
