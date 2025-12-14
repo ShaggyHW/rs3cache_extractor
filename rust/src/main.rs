@@ -22,6 +22,8 @@ enum Commands {
         /// Path to SQLite DB (defaults to repo_root/tiles.db)
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long, help = "Path to overrides file with lines: x,y,z,walk_mask (comma-separated)")]
+        overrides: Option<PathBuf>,
     },
 
     /// Import XLSX or Google Sheet into worldReachableTiles.db using the native Rust importer
@@ -69,11 +71,11 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::LoadTiles { json_dir, db } => {
+        Commands::LoadTiles { json_dir, db, overrides } => {
             let (def_json, def_db) = util::default_paths();
             let json_folder = json_dir.unwrap_or(def_json);
             let db_path = db.unwrap_or(def_db);
-            commands::load_tiles::cmd_load_tiles(&json_folder, &db_path)
+            commands::load_tiles::cmd_load_tiles(&json_folder, &db_path, overrides.as_deref())
         }
         Commands::ImportXlsx { xlsx, db, dry_run, truncate, sheets } => {
             commands::import_xlsx::cmd_import_xlsx(&xlsx, &db, dry_run, &truncate, &sheets)

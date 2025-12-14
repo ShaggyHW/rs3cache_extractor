@@ -6,7 +6,7 @@ npm run build
 
 node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
 
-cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db tiles.db
+cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db tiles.db --overrides override.txt
 cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo' --db tiles.db
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 

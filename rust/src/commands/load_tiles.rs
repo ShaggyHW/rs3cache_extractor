@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::fs::{self, File};
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -35,7 +35,7 @@ struct Tile {
     walk_mask: Option<i64>,
 }
 
-pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path) -> Result<()> {
+pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path, overrides_path: Option<&Path>) -> Result<()> {
     println!("Using JSON folder: {}", json_folder.display());
     println!("Using DB file    : {}", db_path.display());
 
@@ -49,7 +49,60 @@ pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path) -> Result<()> {
     crate::db::create_tables(&mut conn)?;
     load_json_files(json_folder, &mut conn)?;
 
+    if let Some(overrides_path) = overrides_path {
+        apply_overrides_file(overrides_path, &mut conn)?;
+    }
+
     println!("Tiles successfully loaded into {}", db_path.display());
+    Ok(())
+}
+
+fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Overrides file not found: {}", path.display());
+    }
+
+    println!("Applying overrides from {}...", path.display());
+    let file = File::open(path).with_context(|| format!("open overrides file {}", path.display()))?;
+    let reader = BufReader::new(file);
+
+    let tx = conn.transaction()?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO tiles (x, y, plane, walk_mask, RegionID) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(x, y, plane) DO UPDATE SET walk_mask=excluded.walk_mask, RegionID=excluded.RegionID",
+    )?;
+
+    for (idx, line_res) in reader.lines().enumerate() {
+        let line_no = idx + 1;
+        let line = line_res.with_context(|| format!("read overrides line {}", line_no))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
+        if parts.len() != 4 {
+            anyhow::bail!(
+                "Invalid overrides line {} in {}: expected 4 comma-separated values (x,y,z,walk_mask)",
+                line_no,
+                path.display()
+            );
+        }
+
+        let x: i64 = parts[0].parse().with_context(|| format!("parse x on line {}", line_no))?;
+        let y: i64 = parts[1].parse().with_context(|| format!("parse y on line {}", line_no))?;
+        let plane: i64 = parts[2].parse().with_context(|| format!("parse z on line {}", line_no))?;
+        let walk_mask: i64 = parts[3].parse().with_context(|| format!("parse walk_mask on line {}", line_no))?;
+
+        let region_x = x >> 6;
+        let region_y = y >> 6;
+        let region_id = (region_x << 8) + region_y;
+
+        stmt.execute(rusqlite::params![x, y, plane, walk_mask, region_id])?;
+    }
+
+    drop(stmt);
+    tx.commit()?;
     Ok(())
 }
 
