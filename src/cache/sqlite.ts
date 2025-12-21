@@ -63,7 +63,7 @@ export class GameCacheLoader extends cache.CacheFileSource {
 	}
 
 	openTable(major: number) {
-		let sqlite = __non_webpack_require__("sqlite3") as typeof import("sqlite3");
+		let sqlite = __non_webpack_require__(/*! sqlite3 */"sqlite3") as typeof import("sqlite3");
 		if (!this.opentables.get(major)) {
 			let db: CacheTable["db"] = null;
 			let indices: CacheTable["indices"];
@@ -84,7 +84,25 @@ export class GameCacheLoader extends cache.CacheFileSource {
 			} else {
 				let dbfile = path.resolve(this.cachedir, `js5-${major}.jcache`);
 				//need separate throw here since sqlite just crashes instead of throwing
-				if (!fs.existsSync(dbfile)) { throw new Error(`cache index ${major} doesn't exist`); }
+				if (!fs.existsSync(dbfile)) {
+					let files: string[] = [];
+					try {
+						files = fs.readdirSync(path.resolve(this.cachedir));
+					} catch {
+						// ignore
+					}
+					let majors = files
+						.map(f => f.match(/js5-(\d+)\.jcache$/))
+						.filter((m): m is RegExpMatchArray => !!m)
+						.map(m => +m[1])
+						.sort((a, b) => a - b);
+					let detected = majors.length == 0 ? "(none)" : majors.join(", ");
+					throw new Error(
+						`cache index ${major} doesn't exist in ${this.cachedir}. ` +
+						`Detected js5 indices: ${detected}. ` +
+						`Expected files like js5-<index>.jcache in this directory.`
+					);
+				}
 				db = new sqlite.Database(dbfile, this.writable ? sqlite.OPEN_READWRITE : sqlite.OPEN_READONLY);
 				let ready = new Promise<void>(done => db!.once("open", done));
 				let dbget = async (query: string, args: any[]) => {

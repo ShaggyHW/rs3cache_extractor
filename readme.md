@@ -12,9 +12,10 @@ cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 
 
 
-npm run nodegl -- dist/maprender \
-  -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ \
-  -c extract_map/mapconfig.jsonc
+--Item Extraction
+
+node dist/cli extract -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/  -s cache/items --mode items --single
+
 
 ```
 

@@ -1,0 +1,772 @@
+{
+  "type": "object",
+  "properties": {
+    "nullopt": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "baseModel": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "name": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "buff_effect": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "model_zoom": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "rotation_0": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "rotation_1": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "modelTranslate_0": {
+      "oneOf": [
+        {"type": "number", "maximum": 32767, "minimum": -32768},
+        {"type": "null"}
+      ]
+    },
+    "modelTranslate_1": {
+      "oneOf": [
+        {"type": "number", "maximum": 32767, "minimum": -32768},
+        {"type": "null"}
+      ]
+    },
+    "unknown_0A": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "stackable_1": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "value": {
+      "oneOf": [
+        {"type": "number", "maximum": 2147483647, "minimum": -2147483648},
+        {"type": "null"}
+      ]
+    },
+    "equipSlotId": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "equipId": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "unknown_0F": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "members": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "multiStackSize": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "maleModels_0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "anyOf": [
+                {"type": "number", "maximum": 2147483647, "minimum": 0},
+                {"type": "number", "maximum": 65535, "minimum": 0}
+              ]
+            },
+            "type": {
+              "anyOf": [
+                {"const": 0},
+                {"type": "number", "maximum": 255, "minimum": 0}
+              ]
+            }
+          },
+          "required": ["id", "type"]
+        },
+        {"type": "null"}
+      ]
+    },
+    "maleModels_1": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "femaleModels_0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "anyOf": [
+                {"type": "number", "maximum": 2147483647, "minimum": 0},
+                {"type": "number", "maximum": 65535, "minimum": 0}
+              ]
+            },
+            "type": {
+              "anyOf": [
+                {"const": 0},
+                {"type": "number", "maximum": 255, "minimum": 0}
+              ]
+            }
+          },
+          "required": ["id", "type"]
+        },
+        {"type": "null"}
+      ]
+    },
+    "femaleModels_1": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "unknown_1B": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_0": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "ground_actions_1": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "ground_actions_2": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "ground_actions_3": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "ground_actions_4": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "widget_actions_0": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "widget_actions_1": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "widget_actions_2": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "widget_actions_3": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "widget_actions_4": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "color_replacements": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {"type": "number", "maximum": 65535, "minimum": 0},
+              {"type": "number", "maximum": 65535, "minimum": 0}
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "material_replacements": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {"type": "number", "maximum": 65535, "minimum": 0},
+              {"type": "number", "maximum": 65535, "minimum": 0}
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "recolourPalette": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {"type": "number", "maximum": 255, "minimum": 0},
+              {"type": "number", "maximum": 127, "minimum": -128}
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "nameColor": {
+      "oneOf": [
+        {"type": "number", "maximum": 2147483647, "minimum": -2147483648},
+        {"type": "null"}
+      ]
+    },
+    "recolorDstIndices": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "retextureDstIndices": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "tradeable": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "buy_limit": {
+      "oneOf": [
+        {"type": "number", "maximum": 2147483647, "minimum": -2147483648},
+        {"type": "null"}
+      ]
+    },
+    "maleModels_2": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "femaleModels_2": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "maleHeads_0": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "femaleHeads_0": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "maleHeads_1": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "femaleHeads_1": {
+      "oneOf": [
+        {
+          "anyOf": [
+            {"type": "number", "maximum": 2147483647, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ]
+        },
+        {"type": "null"}
+      ]
+    },
+    "category": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "rotation_2": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "dummyItem": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "noteData": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "noteTemplate": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "stack_info_0": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_1": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_2": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_3": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_4": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_5": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_6": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_7": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_8": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "stack_info_9": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 65535, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "scale_0": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "scale_1": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "scale_2": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ambiance": {
+      "oneOf": [
+        {"type": "number", "maximum": 127, "minimum": -128},
+        {"type": "null"}
+      ]
+    },
+    "contrast": {
+      "oneOf": [
+        {"type": "number", "maximum": 127, "minimum": -128},
+        {"type": "null"}
+      ]
+    },
+    "team": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "loanId": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "loanTemplate": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "male_translate": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 255, "minimum": 0}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        {"type": "null"}
+      ]
+    },
+    "female_translate": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 255, "minimum": 0}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        {"type": "null"}
+      ]
+    },
+    "unknown_7F": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "unknown_80": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "unknown_81": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "unknown_82": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 255, "minimum": 0},
+            {"type": "number", "maximum": 65535, "minimum": 0}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "quests": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {"type": "number", "maximum": 255, "minimum": 0},
+              {"type": "number", "maximum": 65535, "minimum": 0}
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "pickSizeShift": {
+      "oneOf": [
+        {"type": "number", "maximum": 255, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "bindLink": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "bindTemplate": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_cursor_0": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_cursor_1": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_cursor_2": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_cursor_3": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "ground_actions_cursor_4": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "widget_actions_cursor_0": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "widget_actions_cursor_1": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "widget_actions_cursor_2": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "widget_actions_cursor_3": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "widget_actions_cursor_4": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "dummy": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "randomizeGroundPos": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "combine_info": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "combine_template": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "combine_num_required": {
+      "oneOf": [
+        {"type": "number", "maximum": 65535, "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "combine_shard_name": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "neverStackable": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "unknown_A7": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "unknown_A8": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "unknown_B2": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "big_value": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": [
+            {"type": "number", "maximum": 2147483647, "minimum": -2147483648},
+            {"type": "number", "maximum": 2147483647, "minimum": -2147483648}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {"type": "null"}
+      ]
+    },
+    "extra": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prop": {"type": "number", "maximum": 16777215, "minimum": 0},
+              "intvalue": {
+                "oneOf": [
+                  {
+                    "type": "number",
+                    "maximum": 2147483647,
+                    "minimum": -2147483648
+                  },
+                  {"type": "null"}
+                ]
+              },
+              "stringvalue": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+            },
+            "required": ["prop", "intvalue", "stringvalue"]
+          }
+        },
+        {"type": "null"}
+      ]
+    }
+  }
+}

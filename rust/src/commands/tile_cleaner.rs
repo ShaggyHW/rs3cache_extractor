@@ -391,6 +391,22 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
     q.push_back(start);
     vis.insert(start);
 
+    // Important: seed BFS with teleport endpoints so destination tiles are retained in the cleaned DB
+    // even if their origin tiles are not walk-reachable (e.g., one-way walk masks or data issues).
+    println!("Seeding BFS with teleport endpoints (door/lodestone/object/npc)...");
+    for &n in door.values().flatten() {
+        if vis.insert(n) { q.push_back(n); }
+    }
+    for &n in &lodestones {
+        if vis.insert(n) { q.push_back(n); }
+    }
+    for &n in obj.values().flatten() {
+        if vis.insert(n) { q.push_back(n); }
+    }
+    for &n in npc.values().flatten() {
+        if vis.insert(n) { q.push_back(n); }
+    }
+
     for &n in &item_dests {
         if vis.insert(n) { q.push_back(n); }
     }

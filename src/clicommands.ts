@@ -136,6 +136,8 @@ export function cliApi(ctx: CliApiContext) {
 			fixhash: flag({ long: "fixhash", short: "h" }),
 			batched: flag({ long: "batched", short: "b" }),
 			batchlimit: option({ long: "batchsize", type: cmdts.number, defaultValue: () => -1 }),
+			single: flag({ long: "single" }),
+			singlefile: option({ long: "singlefile", type: cmdts.string, defaultValue: () => "" }),
 			keepbuffers: flag({ long: "keepbuffers" }),
 			cs2relativecomps: flag({ long: "cs2relativecomps" }),
 			cs2notypes: flag({ long: "cs2notypes" }),

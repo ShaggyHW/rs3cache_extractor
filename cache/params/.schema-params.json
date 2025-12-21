@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "unk04": {"oneOf": [{"const": true}, {"type": "null"}]},
+    "type": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "vartype": {"type": "number", "maximum": 32767, "minimum": 0},
+            "defaultint": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "maximum": 2147483647,
+                  "minimum": -2147483648
+                },
+                {"type": "null"}
+              ]
+            },
+            "defaultstring": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+          },
+          "required": ["vartype", "defaultint", "defaultstring"]
+        },
+        {"type": "null"}
+      ]
+    }
+  }
+}

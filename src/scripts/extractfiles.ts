@@ -4,16 +4,17 @@ import { FileRange, getOrInsert } from "../utils";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
 import { cacheFileDecodeModes, DecodeMode, DecodeModeFactory } from "./filetypes";
 
-export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, source: CacheFileSource, args: { batched: boolean, batchlimit: number, mode: string, files: FileRange[], edit: boolean, skipread: boolean }, decoderflags: Record<string, string>) {
+export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, source: CacheFileSource, args: { batched: boolean, batchlimit: number, mode: string, files: FileRange[], edit: boolean, skipread: boolean, single?: boolean, singlefile?: string }, decoderflags: Record<string, string>) {
 	let modeconstr: DecodeModeFactory = cacheFileDecodeModes[args.mode];
 	if (!modeconstr) { throw new Error("unknown mode"); }
 	let flags = { ...decoderflags };
-	if (args.batched || args.batchlimit != -1) { flags.batched = "true"; }
+	if ((args.batched || args.batchlimit != -1) && !args.single) { flags.batched = "true"; }
 	let mode = modeconstr(flags);
 	await mode.prepareDump(outdir, source);
 
-	let batchMaxFiles = args.batchlimit;
-	let batchSubfile = args.batched;
+	let batchMaxFiles = args.single ? -1 : args.batchlimit;
+	let batchSubfile = args.single ? false : args.batched;
+	let singleOutputs: (string | Buffer)[] | null = (args.single ? [] : null);
 
 	let ranges = args.files;
 
@@ -66,6 +67,10 @@ export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, 
 				output.log(`file ${logicalid.join(".")}: ${e}`);
 				continue;
 			}
+			if (singleOutputs) {
+				singleOutputs.push(res);
+				continue;
+			}
 			if (batchSubfile || batchMaxFiles != -1) {
 				let maxedbatchsize = currentBatch && batchMaxFiles != -1 && currentBatch.outputs.length >= batchMaxFiles;
 				let newarch = currentBatch && currentBatch.arch != arch
@@ -87,7 +92,14 @@ export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, 
 				await outdir.writeFile(filename, res);
 			}
 		}
-		flushbatch();
+		if (singleOutputs) {
+			let filename = (args.singlefile && args.singlefile.trim() != "")
+				? args.singlefile
+				: `${args.mode}.all.${mode.ext}`;
+			await outdir.writeFile(filename, mode.combineSubs(singleOutputs));
+		} else {
+			flushbatch();
+		}
 	}
 
 	if (args.edit) {
