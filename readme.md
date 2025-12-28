@@ -11,10 +11,7 @@ cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.go
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 
 
-
---Item Extraction
-
-node dist/cli extract -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/  -s cache/items --mode items --single
+walk_mask_decode.py --encode left
 
 
 ```
