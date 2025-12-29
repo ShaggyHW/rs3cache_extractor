@@ -17,6 +17,12 @@ DIRECTION_BITS: List[Tuple[int, str]] = [
 ]
 
 
+_DIRECTION_ALIASES = {
+    "up": "top",
+    "down": "bottom",
+}
+
+
 def parse_int(value: str) -> int:
     value = value.strip()
     if not value:
@@ -38,10 +44,17 @@ def encode_walk_mask(walkable: Dict[str, bool]) -> int:
 
 def encode_walk_mask_from_directions(directions: List[str]) -> int:
     valid = {name for _, name in DIRECTION_BITS}
-    unknown = sorted({d for d in directions if d not in valid})
+    normalized: List[str] = []
+    for d in directions:
+        d = d.strip().lower()
+        if not d:
+            continue
+        normalized.append(_DIRECTION_ALIASES.get(d, d))
+
+    unknown = sorted({d for d in normalized if d not in valid})
     if unknown:
         raise ValueError(f"unknown direction(s): {', '.join(unknown)}")
-    return encode_walk_mask({d: True for d in directions})
+    return encode_walk_mask({d: True for d in normalized})
 
 
 def _parse_positions_as_directions(value: Any) -> List[str]:
@@ -125,31 +138,63 @@ def walkable_directions(walk_mask: int) -> List[str]:
     return [name for bit, name in DIRECTION_BITS if (walk_mask & (1 << bit))]
 
 
+def _extract_encode_value(argv: List[str]) -> str | None:
+    for arg in argv[1:]:
+        if arg.startswith("--encode="):
+            return arg[len("--encode=") :]
+        if arg.startswith("--enconde="):
+            return arg[len("--enconde=") :]
+
+    for i, arg in enumerate(argv[1:], start=1):
+        if arg in {"--encode", "--enconde"}:
+            if i + 1 < len(argv):
+                return argv[i + 1]
+            return ""
+
+    return None
+
+
 def main(argv: List[str]) -> int:
     if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
         print("Usage: walk_mask_decode.py <walk_mask> [--json]")
         print("       walk_mask_decode.py --encode <json|directions> [--json]")
+        print("       walk_mask_decode.py --enconde <json|directions> [--json]")
         print("  <walk_mask> can be decimal (e.g. 13) or hex (e.g. 0x0d)")
         print("  --encode input accepts JSON (directions/walkable/positions) or a comma-separated list")
         return 0
 
-    encode_mode = "--encode" in argv[1:]
-    emit_json = "--json" in argv[2:]
+    encode_mode = any(a in {"--encode", "--enconde"} or a.startswith("--encode=") or a.startswith("--enconde=") for a in argv[1:])
+    emit_json = "--json" in argv[1:]
 
     positional = [a for a in argv[1:] if not a.startswith("--")]
 
-    if positional:
-        raw = positional[0]
+    if encode_mode:
+        raw = _extract_encode_value(argv)
+        if raw is None:
+            if positional:
+                if positional[0].lstrip().startswith(("{", "[")):
+                    raw = positional[0]
+                else:
+                    raw = ",".join(positional)
+            else:
+                prompt = "walkable json/directions: "
+                raw = sys.stdin.readline().strip() or input(prompt).strip()
     else:
-        prompt = "walkable json/directions: " if encode_mode else "walk_mask: "
-        raw = sys.stdin.readline().strip() or input(prompt).strip()
+        if positional:
+            raw = positional[0]
+        else:
+            prompt = "walk_mask: "
+            raw = sys.stdin.readline().strip() or input(prompt).strip()
 
     if encode_mode:
         try:
             if raw.lstrip().startswith(("{", "[")):
                 directions = parse_walkable_json(raw)
             else:
-                directions = [p.strip() for p in raw.split(",") if p.strip()]
+                if "," in raw:
+                    directions = [p.strip() for p in raw.split(",") if p.strip()]
+                else:
+                    directions = [p.strip() for p in raw.split() if p.strip()]
             mask = encode_walk_mask_from_directions(directions)
         except ValueError as e:
             print(f"Invalid encode input: {e}", file=sys.stderr)
