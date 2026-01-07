@@ -10,6 +10,14 @@ use rayon::prelude::*;
 
 type Tile = (i32, i32, i32);
 
+fn center_tile(min_x: i32, max_x: i32, min_y: i32, max_y: i32, plane: i32) -> Tile {
+    let (min_x, max_x) = if min_x <= max_x { (min_x, max_x) } else { (max_x, min_x) };
+    let (min_y, max_y) = if min_y <= max_y { (min_y, max_y) } else { (max_y, min_y) };
+    let cx = (min_x as i64 + max_x as i64) / 2;
+    let cy = (min_y as i64 + max_y as i64) / 2;
+    (cx as i32, cy as i32, plane)
+}
+
 const RECIP: &[(&str, &str)] = &[
     ("left", "right"),
     ("right", "left"),
@@ -223,26 +231,10 @@ fn get_object_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>>
             d_max_y.unwrap() as i32,
             d_plane.unwrap() as i32,
         );
-        let mut dests: Vec<Tile> = Vec::new();
-        for dx in d_min_x..=d_max_x {
-            for dy in d_min_y..=d_max_y {
-                dests.push((dx, dy, d_plane));
-            }
-        }
-        let mut origins: Vec<Tile> = Vec::new();
-        for ox in o_min_x..=o_max_x {
-            for oy in o_min_y..=o_max_y {
-                origins.push((ox, oy, o_plane));
-            }
-        }
-        for &origin in origins.iter() {
-            let e = adj.entry(origin).or_default();
-            e.extend(dests.iter().copied());
-        }
-        for &dest in dests.iter() {
-            let e = adj.entry(dest).or_default();
-            e.extend(origins.iter().copied());
-        }
+        let origin = center_tile(o_min_x, o_max_x, o_min_y, o_max_y, o_plane);
+        let dest = center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane);
+        adj.entry(origin).or_default().push(dest);
+        adj.entry(dest).or_default().push(origin);
     }
     Ok(adj)
 }
@@ -282,26 +274,10 @@ fn get_npc_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
             d_max_y.unwrap() as i32,
             d_plane.unwrap() as i32,
         );
-        let mut dests: Vec<Tile> = Vec::new();
-        for dx in d_min_x..=d_max_x {
-            for dy in d_min_y..=d_max_y {
-                dests.push((dx, dy, d_plane));
-            }
-        }
-        let mut origins: Vec<Tile> = Vec::new();
-        for ox in o_min_x..=o_max_x {
-            for oy in o_min_y..=o_max_y {
-                origins.push((ox, oy, o_plane));
-            }
-        }
-        for &origin in origins.iter() {
-            let e = adj.entry(origin).or_default();
-            e.extend(dests.iter().copied());
-        }
-        for &dest in dests.iter() {
-            let e = adj.entry(dest).or_default();
-            e.extend(origins.iter().copied());
-        }
+        let origin = center_tile(o_min_x, o_max_x, o_min_y, o_max_y, o_plane);
+        let dest = center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane);
+        adj.entry(origin).or_default().push(dest);
+        adj.entry(dest).or_default().push(origin);
     }
     Ok(adj)
 }
@@ -326,11 +302,7 @@ fn get_item_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
             d_max_y.unwrap() as i32,
             d_plane.unwrap() as i32,
         );
-        for dx in d_min_x..=d_max_x {
-            for dy in d_min_y..=d_max_y {
-                out.push((dx, dy, d_plane));
-            }
-        }
+        out.push(center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane));
     }
     Ok(out)
 }
@@ -355,11 +327,7 @@ fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
             d_max_y.unwrap() as i32,
             d_plane.unwrap() as i32,
         );
-        for dx in d_min_x..=d_max_x {
-            for dy in d_min_y..=d_max_y {
-                out.push((dx, dy, d_plane));
-            }
-        }
+        out.push(center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane));
     }
     Ok(out)
 }
