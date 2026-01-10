@@ -464,7 +464,7 @@ fn reachable_tiles(
     let ifslot = get_ifslot_dest_tiles(conn)?;
     println!("Loaded {} interface slot destinations", ifslot.len());
 
-    let mut cache = WalkCache::new_with_overrides(overrides);
+    let mut cache = WalkCache::new_with_overrides(overrides.clone());
     let mut q: VecDeque<Tile> = VecDeque::new();
     let mut vis: HashSet<Tile> = HashSet::new();
 
@@ -485,6 +485,13 @@ fn reachable_tiles(
     }
     for &n in npc.values().flatten() {
         if vis.insert(n) { q.push_back(n); }
+    }
+
+    println!("Seeding BFS with fairy ring tiles...");
+    for (&t, ov) in overrides.iter() {
+        if ov.force_mask.is_some() {
+            if vis.insert(t) { q.push_back(t); }
+        }
     }
 
     for &n in &item_dests {
