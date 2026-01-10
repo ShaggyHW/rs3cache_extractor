@@ -10,6 +10,88 @@ use rayon::prelude::*;
 
 type Tile = (i32, i32, i32);
 
+#[derive(Clone, Copy, Debug, Default)]
+struct WalkMaskOverride {
+    force_mask: Option<i64>,
+    or_mask: i64,
+}
+
+fn dir_to_bit(dir: &str) -> Option<i64> {
+    match dir {
+        "left" => Some(1 << 0),
+        "bottom" => Some(1 << 1),
+        "right" => Some(1 << 2),
+        "top" => Some(1 << 3),
+        "topleft" => Some(1 << 4),
+        "bottomleft" => Some(1 << 5),
+        "bottomright" => Some(1 << 6),
+        "topright" => Some(1 << 7),
+        _ => None,
+    }
+}
+
+fn diag_required_dirs(dir: &str) -> Option<[&'static str; 2]> {
+    match dir {
+        "topleft" => Some(["top", "left"]),
+        "topright" => Some(["top", "right"]),
+        "bottomleft" => Some(["bottom", "left"]),
+        "bottomright" => Some(["bottom", "right"]),
+        _ => None,
+    }
+}
+
+fn build_fairy_ring_overrides(conn: &Connection) -> Result<std::sync::Arc<HashMap<Tile, WalkMaskOverride>>> {
+    let mut out: HashMap<Tile, WalkMaskOverride> = HashMap::new();
+
+    let mut stmt = match conn.prepare("SELECT x, y, plane FROM teleports_fairy_rings_nodes") {
+        Ok(s) => s,
+        Err(_) => return Ok(std::sync::Arc::new(out)),
+    };
+
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let x: Option<i64> = r.get(0)?;
+        let y: Option<i64> = r.get(1)?;
+        let p: Option<i64> = r.get(2)?;
+        let (Some(x), Some(y), Some(p)) = (x, y, p) else { continue; };
+        let ring: Tile = (x as i32, y as i32, p as i32);
+
+        out.entry(ring)
+            .and_modify(|e| e.force_mask = Some(255))
+            .or_insert(WalkMaskOverride { force_mask: Some(255), or_mask: 0 });
+
+        let neighbors: [((i32, i32), &str); 8] = [
+            ((-1, 0), "right"),
+            ((1, 0), "left"),
+            ((0, -1), "top"),
+            ((0, 1), "bottom"),
+            ((-1, -1), "topright"),
+            ((1, -1), "topleft"),
+            ((-1, 1), "bottomright"),
+            ((1, 1), "bottomleft"),
+        ];
+
+        for &((dx, dy), dir) in &neighbors {
+            let nt: Tile = (ring.0 + dx, ring.1 + dy, ring.2);
+            let mut bits = dir_to_bit(dir).unwrap_or(0);
+            if let Some(req) = diag_required_dirs(dir) {
+                for d in req {
+                    bits |= dir_to_bit(d).unwrap_or(0);
+                }
+            }
+            out.entry(nt)
+                .and_modify(|e| {
+                    if e.force_mask.is_none() {
+                        e.or_mask |= bits;
+                    }
+                })
+                .or_insert(WalkMaskOverride { force_mask: None, or_mask: bits });
+        }
+    }
+
+    Ok(std::sync::Arc::new(out))
+}
+
 fn center_tile(min_x: i32, max_x: i32, min_y: i32, max_y: i32, plane: i32) -> Tile {
     let (min_x, max_x) = if min_x <= max_x { (min_x, max_x) } else { (max_x, min_x) };
     let (min_y, max_y) = if min_y <= max_y { (min_y, max_y) } else { (max_y, min_y) };
@@ -56,10 +138,25 @@ fn diag_require(k: &str) -> Option<(&'static str, &'static str)> {
 struct WalkCache {
     raw: HashMap<Tile, HashMap<String, bool>>, 
     reconciled: HashMap<Tile, HashMap<String, bool>>, 
+    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
 }
 
 impl WalkCache {
-    fn new() -> Self { Self { raw: HashMap::new(), reconciled: HashMap::new() } }
+    fn new() -> Self {
+        Self {
+            raw: HashMap::new(),
+            reconciled: HashMap::new(),
+            overrides: std::sync::Arc::new(HashMap::new()),
+        }
+    }
+
+    fn new_with_overrides(overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>) -> Self {
+        Self {
+            raw: HashMap::new(),
+            reconciled: HashMap::new(),
+            overrides,
+        }
+    }
 
     // Mapping order for walk_mask bits: 0..7
     // [left, bottom, right, top, topleft, bottomleft, bottomright, topright]
@@ -106,12 +203,23 @@ impl WalkCache {
                 |row| Ok(row.get(0)?),
             )
             .optional()?;
-        let m = if let Some(walk_mask) = row {
-            let w = walk_mask.unwrap_or(0);
-            if w != 0 { Self::decode_mask(w) } else { HashMap::new() }
-        } else {
-            HashMap::new()
+
+        let Some(walk_mask) = row else {
+            // Tile row does not exist; never allow overrides to "create" walkability for missing tiles.
+            self.raw.insert(t, HashMap::new());
+            return Ok(HashMap::new());
         };
+
+        let mut w = walk_mask.unwrap_or(0);
+        if let Some(ov) = self.overrides.get(&t) {
+            if let Some(f) = ov.force_mask {
+                w = f;
+            } else {
+                w |= ov.or_mask;
+            }
+        }
+
+        let m = if w != 0 { Self::decode_mask(w) } else { HashMap::new() };
         self.raw.insert(t, m.clone());
         Ok(m)
     }
@@ -332,7 +440,11 @@ fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
     Ok(out)
 }
 
-fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
+fn reachable_tiles(
+    conn: &Connection,
+    start: Tile,
+    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
+) -> Result<HashSet<Tile>> {
     println!("Loading door links...");
     let door = get_door_links(conn)?;
     println!("Loaded {} door link origins with {} total destinations", door.len(), door.values().map(|v| v.len()).sum::<usize>());
@@ -352,7 +464,7 @@ fn reachable_tiles(conn: &Connection, start: Tile) -> Result<HashSet<Tile>> {
     let ifslot = get_ifslot_dest_tiles(conn)?;
     println!("Loaded {} interface slot destinations", ifslot.len());
 
-    let mut cache = WalkCache::new();
+    let mut cache = WalkCache::new_with_overrides(overrides);
     let mut q: VecDeque<Tile> = VecDeque::new();
     let mut vis: HashSet<Tile> = HashSet::new();
 
@@ -490,6 +602,7 @@ fn create_tiles_and_insert(
     src_db_path: &Path,
     dst: &mut Connection,
     reachable: &HashSet<Tile>,
+    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
 ) -> Result<()> {
     println!("Creating destination tiles table and inserting reachable tiles...");
     let create_sql = get_create_table_sql(src_meta, "tiles")?;
@@ -517,6 +630,7 @@ fn create_tiles_and_insert(
         let select_sql = select_sql.clone();
         let cols_len = cols.len();
         let src_path = src_db_path.to_path_buf();
+        let overrides_arc = overrides.clone();
         thread::spawn(move || {
             // Process tiles in parallel and stream to writer in batches
             let mut tiles: Vec<Tile> = reachable_arc.iter().copied().collect();
@@ -536,7 +650,7 @@ fn create_tiles_and_insert(
                         Err(e) => { eprintln!("worker prepare select error: {}", e); return; }
                     };
 
-                    let mut cache = WalkCache::new();
+                    let mut cache = WalkCache::new_with_overrides(overrides_arc.clone());
                     let mut out: Vec<Vec<Value>> = Vec::with_capacity(BATCH);
                     for &t in chunk.iter() {
                         match sel.query(params![t.0, t.1, t.2]) {
@@ -549,7 +663,14 @@ fn create_tiles_and_insert(
                                     if let Some(idx) = walk_idx {
                                         match cache.get_reconciled(&conn, t) {
                                             Ok(rec) => {
-                                                let nm = sanitize_walk_mask_for_reachable(&rec, t, &reachable_arc);
+                                                let mut nm = sanitize_walk_mask_for_reachable(&rec, t, &reachable_arc);
+                                                if let Some(ov) = overrides_arc.get(&t) {
+                                                    if let Some(f) = ov.force_mask {
+                                                        nm = f;
+                                                    } else {
+                                                        nm |= ov.or_mask;
+                                                    }
+                                                }
                                                 row[idx] = Value::Integer(nm);
                                             }
                                             Err(e) => { eprintln!("reconcile error for {:?}: {}", t, e); }
@@ -688,7 +809,8 @@ pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32
     src.execute_batch("PRAGMA foreign_keys=ON;")?;
     let start: Tile = (start_x, start_y, start_plane);
     println!("Computing reachable tiles...");
-    let reachable = reachable_tiles(&src, start)?;
+    let overrides = build_fairy_ring_overrides(&src)?;
+    let reachable = reachable_tiles(&src, start, overrides.clone())?;
     println!("Identified {} reachable tiles", reachable.len());
 
     if out_db.exists() {
@@ -701,7 +823,7 @@ pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32
     dst.execute_batch("PRAGMA foreign_keys=OFF;")?;
     println!("Disabled foreign key checks on destination");
 
-    create_tiles_and_insert(&src, src_db, &mut dst, &reachable)?;
+    create_tiles_and_insert(&src, src_db, &mut dst, &reachable, overrides)?;
 
     let mut skip = HashSet::new();
     skip.insert("tiles".to_string());
