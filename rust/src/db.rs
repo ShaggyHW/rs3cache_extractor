@@ -209,6 +209,20 @@ CREATE TABLE teleports_object_nodes (
     requirements TEXT
 );
 
+CREATE TABLE teleports_fairy_rings_nodes (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER,
+    x INTEGER,
+    y INTEGER,
+    plane INTEGER,
+    cost INTEGER,
+    code TEXT,
+    action TEXT,
+    next_node_type TEXT,
+    next_node_id INTEGER,
+    requirements TEXT
+);
+
 CREATE TABLE teleports_requirements (
     id INTEGER PRIMARY KEY,
     metaInfo TEXT,
@@ -269,6 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_tobj_req  ON teleports_object_nodes(requirements)
 CREATE INDEX IF NOT EXISTS idx_titem_req ON teleports_item_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tif_req   ON teleports_ifslot_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tlode_req ON teleports_lodestone_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tfairy_req ON teleports_fairy_rings_nodes(requirements);
 
 -- ========== VIEW ==========
 

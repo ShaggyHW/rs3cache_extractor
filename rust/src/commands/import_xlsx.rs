@@ -8,7 +8,16 @@ use tempfile::NamedTempFile;
 use std::io::Write;
 use url::Url;
 
-const ALLOWED_NEXT_NODE_TYPES: &[&str] = &["object", "npc", "ifslot", "door", "lodestone", "item"];
+const ALLOWED_NEXT_NODE_TYPES: &[&str] = &[
+    "object",
+    "npc",
+    "ifslot",
+    "door",
+    "lodestone",
+    "item",
+    "fairy_rings",
+    "fairy_ring",
+];
 const ALLOWED_DOOR_DIRECTIONS: &[&str] = &["IN", "OUT"];
 const ALLOWED_REQUIREMENT_COMPARISONS: &[&str] = &["=", "!=", "<", "<=", ">", ">="];
 const TELEPORT_NODE_TABLES: &[&str] = &[
@@ -18,6 +27,7 @@ const TELEPORT_NODE_TABLES: &[&str] = &[
     "teleports_lodestone_nodes",
     "teleports_npc_nodes",
     "teleports_object_nodes",
+    "teleports_fairy_rings_nodes",
     // include requirements to rebuild edges when requirement_id changes
     "teleports_requirements",
 ];
