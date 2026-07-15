@@ -223,6 +223,21 @@ CREATE TABLE teleports_fairy_rings_nodes (
     requirements TEXT
 );
 
+CREATE TABLE teleports_POA_nodes (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER,
+    action TEXT,
+    action2 TEXT,
+    action3 TEXT,
+    dest_min_x INTEGER,
+    dest_max_x INTEGER,
+    dest_min_y INTEGER,
+    dest_max_y INTEGER,
+    dest_plane INTEGER,
+    cost INTEGER,
+    requirements TEXT
+);
+
 CREATE TABLE teleports_requirements (
     id INTEGER PRIMARY KEY,
     metaInfo TEXT,
@@ -284,6 +299,7 @@ CREATE INDEX IF NOT EXISTS idx_titem_req ON teleports_item_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tif_req   ON teleports_ifslot_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tlode_req ON teleports_lodestone_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tfairy_req ON teleports_fairy_rings_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tpoa_req ON teleports_POA_nodes(requirements);
 
 -- ========== VIEW ==========
 
@@ -314,7 +330,11 @@ SELECT 'ifslot', id, NULL, NULL, NULL,
        CAST(dest_min_x AS INTEGER), CAST(dest_min_y AS INTEGER),
        CAST(dest_plane AS INTEGER), cost, requirements
 FROM teleports_ifslot_nodes
-WHERE dest_min_x IS NOT NULL;
+WHERE dest_min_x IS NOT NULL
+UNION ALL
+SELECT 'poa', id, NULL, NULL, NULL,
+       dest_min_x, dest_min_y, dest_plane, cost, requirements
+FROM teleports_POA_nodes;
 
     "#,
     )?;

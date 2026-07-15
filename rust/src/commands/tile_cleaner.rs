@@ -415,6 +415,31 @@ fn get_item_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
     Ok(out)
 }
 
+fn get_poa_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
+    let mut out: Vec<Tile> = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_POA_nodes",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let d_min_x: Option<i64> = r.get(0)?;
+        let d_max_x: Option<i64> = r.get(1)?;
+        let d_min_y: Option<i64> = r.get(2)?;
+        let d_max_y: Option<i64> = r.get(3)?;
+        let d_plane: Option<i64> = r.get(4)?;
+        if [d_min_x, d_max_x, d_min_y, d_max_y, d_plane].iter().any(|v| v.is_none()) { continue; }
+        let (d_min_x, d_max_x, d_min_y, d_max_y, d_plane) = (
+            d_min_x.unwrap() as i32,
+            d_max_x.unwrap() as i32,
+            d_min_y.unwrap() as i32,
+            d_max_y.unwrap() as i32,
+            d_plane.unwrap() as i32,
+        );
+        out.push(center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane));
+    }
+    Ok(out)
+}
+
 fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
     let mut out: Vec<Tile> = Vec::new();
     let mut stmt = conn.prepare(
@@ -463,6 +488,9 @@ fn reachable_tiles(
     println!("Loading interface slot destinations...");
     let ifslot = get_ifslot_dest_tiles(conn)?;
     println!("Loaded {} interface slot destinations", ifslot.len());
+    println!("Loading POA teleport destinations...");
+    let poa_dests = get_poa_dest_tiles(conn)?;
+    println!("Loaded {} POA teleport destinations", poa_dests.len());
 
     let mut cache = WalkCache::new_with_overrides(overrides.clone());
     let mut q: VecDeque<Tile> = VecDeque::new();
@@ -495,6 +523,10 @@ fn reachable_tiles(
     }
 
     for &n in &item_dests {
+        if vis.insert(n) { q.push_back(n); }
+    }
+
+    for &n in &poa_dests {
         if vis.insert(n) { q.push_back(n); }
     }
 

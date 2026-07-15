@@ -28,6 +28,7 @@ const TELEPORT_NODE_TABLES: &[&str] = &[
     "teleports_npc_nodes",
     "teleports_object_nodes",
     "teleports_fairy_rings_nodes",
+    "teleports_poa_nodes",
     // include requirements to rebuild edges when requirement_id changes
     "teleports_requirements",
 ];
