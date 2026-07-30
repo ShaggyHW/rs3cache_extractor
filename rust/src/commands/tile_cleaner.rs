@@ -2,21 +2,74 @@ use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, Row};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::path::Path;
-use std::sync::mpsc;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, SyncSender};
 use std::thread;
-
-use rayon::prelude::*;
 
 type Tile = (i32, i32, i32);
 
-#[derive(Clone, Copy, Debug, Default)]
-struct WalkMaskOverride {
-    force_mask: Option<i64>,
-    or_mask: i64,
+/// The tile maps take several million lookups, where SipHash's quality buys nothing
+/// over three coordinates. This is the usual multiply-rotate mix instead.
+#[derive(Default, Clone, Copy)]
+struct TileHasher(u64);
+
+impl std::hash::Hasher for TileHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write_i32(&mut self, i: i32) {
+        self.0 = (self.0.rotate_left(5) ^ (i as u32 as u64)).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_i32(b as i32);
+        }
+    }
 }
 
-fn dir_to_bit(dir: &str) -> Option<i64> {
+type TileBuildHasher = std::hash::BuildHasherDefault<TileHasher>;
+type TileMap<V> = HashMap<Tile, V, TileBuildHasher>;
+type TileSet = HashSet<Tile, TileBuildHasher>;
+
+/// Tiles are streamed from the BFS to the writer thread in batches of this many,
+/// with a bounded channel so a slow writer applies backpressure instead of
+/// letting the queue of pending rows grow without limit.
+const EMIT_BATCH: usize = 4096;
+const CHANNEL_DEPTH: usize = 64;
+
+/// The BFS is a few million random point lookups into a multi-GB table, so the
+/// default 2 MB page cache turns almost every one into a `pread`. Mapping the file
+/// and giving SQLite a real cache serves them from memory instead.
+fn tune_read_conn(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "PRAGMA mmap_size=8589934592;
+         PRAGMA cache_size=-1048576;
+         PRAGMA temp_store=MEMORY;",
+    )?;
+    Ok(())
+}
+
+/// The destination is rebuilt from scratch on every run, so there is nothing to
+/// protect against a crash mid-write.
+fn tune_write_conn(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=OFF;
+         PRAGMA synchronous=OFF;
+         PRAGMA cache_size=-262144;
+         PRAGMA temp_store=MEMORY;",
+    )?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WalkMaskOverride {
+    force_mask: Option<u8>,
+    or_mask: u8,
+}
+
+fn dir_to_bit(dir: &str) -> Option<u8> {
     match dir {
         "left" => Some(1 << 0),
         "bottom" => Some(1 << 1),
@@ -40,8 +93,8 @@ fn diag_required_dirs(dir: &str) -> Option<[&'static str; 2]> {
     }
 }
 
-fn build_fairy_ring_overrides(conn: &Connection) -> Result<std::sync::Arc<HashMap<Tile, WalkMaskOverride>>> {
-    let mut out: HashMap<Tile, WalkMaskOverride> = HashMap::new();
+fn build_fairy_ring_overrides(conn: &Connection) -> Result<std::sync::Arc<TileMap<WalkMaskOverride>>> {
+    let mut out: TileMap<WalkMaskOverride> = TileMap::default();
 
     let mut stmt = match conn.prepare("SELECT x, y, plane FROM teleports_fairy_rings_nodes") {
         Ok(s) => s,
@@ -100,117 +153,78 @@ fn center_tile(min_x: i32, max_x: i32, min_y: i32, max_y: i32, plane: i32) -> Ti
     (cx as i32, cy as i32, plane)
 }
 
-const RECIP: &[(&str, &str)] = &[
-    ("left", "right"),
-    ("right", "left"),
-    ("top", "bottom"),
-    ("bottom", "top"),
-    ("topleft", "bottomright"),
-    ("topright", "bottomleft"),
-    ("bottomleft", "topright"),
-    ("bottomright", "topleft"),
+// Walk masks are handled as raw bits throughout. Bit order, matching the values
+// produced by `dir_to_bit` and stored in `tiles.walk_mask`:
+//   0 left, 1 bottom, 2 right, 3 top, 4 topleft, 5 bottomleft, 6 bottomright, 7 topright
+// Bits 0..4 are the cardinals, 4..8 the diagonals.
+const CARDINALS: std::ops::Range<u8> = 0..4;
+const DIAGONALS: std::ops::Range<u8> = 4..8;
+
+/// (dx, dy) per direction bit. Planes are never crossed by a walk mask.
+const DIR_DELTA: [(i32, i32); 8] = [
+    (-1, 0),  // left
+    (0, -1),  // bottom
+    (1, 0),   // right
+    (0, 1),   // top
+    (-1, 1),  // topleft
+    (-1, -1), // bottomleft
+    (1, -1),  // bottomright
+    (1, 1),   // topright
 ];
 
-fn key_delta(k: &str) -> Option<(i32, i32, i32)> {
-    match k {
-        "top" => Some((0, 1, 0)),
-        "bottom" => Some((0, -1, 0)),
-        "right" => Some((1, 0, 0)),
-        "left" => Some((-1, 0, 0)),
-        "topright" => Some((1, 1, 0)),
-        "topleft" => Some((-1, 1, 0)),
-        "bottomright" => Some((1, -1, 0)),
-        "bottomleft" => Some((-1, -1, 0)),
-        _ => None,
-    }
-}
+/// The bit a neighbour must have set for a step in this direction to be mutual.
+const RECIP_BIT: [u8; 8] = [2, 3, 0, 1, 6, 7, 4, 5];
 
-fn diag_require(k: &str) -> Option<(&'static str, &'static str)> {
-    match k {
-        "topleft" => Some(("top", "left")),
-        "topright" => Some(("top", "right")),
-        "bottomleft" => Some(("bottom", "left")),
-        "bottomright" => Some(("bottom", "right")),
-        _ => None,
-    }
+/// The cardinal bits a diagonal step also requires (0 for the cardinals themselves).
+const DIAG_REQ: [u8; 8] = [
+    0,
+    0,
+    0,
+    0,
+    (1 << 3) | (1 << 0), // topleft: top + left
+    (1 << 1) | (1 << 0), // bottomleft: bottom + left
+    (1 << 1) | (1 << 2), // bottomright: bottom + right
+    (1 << 3) | (1 << 2), // topright: top + right
+];
+
+#[inline]
+fn step(t: Tile, bit: u8) -> Tile {
+    let (dx, dy) = DIR_DELTA[bit as usize];
+    (t.0 + dx, t.1 + dy, t.2)
 }
 
 struct WalkCache {
-    raw: HashMap<Tile, HashMap<String, bool>>, 
-    reconciled: HashMap<Tile, HashMap<String, bool>>, 
-    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
+    // Raw masks are shared between a tile and each of its neighbours, so caching pays.
+    // Reconciled masks are not cached: the BFS pops every tile exactly once.
+    raw: TileMap<u8>,
+    overrides: std::sync::Arc<TileMap<WalkMaskOverride>>,
 }
 
 impl WalkCache {
-    fn new() -> Self {
+    fn new_with_overrides(overrides: std::sync::Arc<TileMap<WalkMaskOverride>>) -> Self {
         Self {
-            raw: HashMap::new(),
-            reconciled: HashMap::new(),
-            overrides: std::sync::Arc::new(HashMap::new()),
-        }
-    }
-
-    fn new_with_overrides(overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>) -> Self {
-        Self {
-            raw: HashMap::new(),
-            reconciled: HashMap::new(),
+            raw: TileMap::default(),
             overrides,
         }
     }
 
-    // Mapping order for walk_mask bits: 0..7
-    // [left, bottom, right, top, topleft, bottomleft, bottomright, topright]
-    fn mask_dirs() -> [&'static str; 8] {
-        [
-            "left",
-            "bottom",
-            "right",
-            "top",
-            "topleft",
-            "bottomleft",
-            "bottomright",
-            "topright",
-        ]
-    }
-
-    fn decode_mask(mask: i64) -> HashMap<String, bool> {
-        let mut out = HashMap::new();
-        let dirs = Self::mask_dirs();
-        for i in 0..8 {
-            if (mask & (1 << i)) != 0 {
-                out.insert(dirs[i].to_string(), true);
-            }
-        }
-        out
-    }
-
-    fn encode_mask(map: &HashMap<String, bool>) -> i64 {
-        let mut mask: i64 = 0;
-        let dirs = Self::mask_dirs();
-        for i in 0..8 {
-            if map.get(dirs[i]).copied().unwrap_or(false) { mask |= 1 << i; }
-        }
-        mask
-    }
-
-    fn get_raw(&mut self, conn: &Connection, t: Tile) -> Result<HashMap<String, bool>> {
-        if let Some(m) = self.raw.get(&t) { return Ok(m.clone()); }
+    fn get_raw(&mut self, conn: &Connection, t: Tile) -> Result<u8> {
+        if let Some(m) = self.raw.get(&t) { return Ok(*m); }
         let (x, y, p) = t;
+        // prepare_cached: this runs millions of times, so the SQL is parsed once.
         let row: Option<Option<i64>> = conn
-            .query_row(
-                "SELECT walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3",
-                params![x, y, p],
-                |row| Ok(row.get(0)?),
-            )
+            .prepare_cached("SELECT walk_mask FROM tiles WHERE x=?1 AND y=?2 AND plane=?3")?
+            .query_row(params![x, y, p], |row| Ok(row.get(0)?))
             .optional()?;
 
         let Some(walk_mask) = row else {
             // Tile row does not exist; never allow overrides to "create" walkability for missing tiles.
-            self.raw.insert(t, HashMap::new());
-            return Ok(HashMap::new());
+            self.raw.insert(t, 0);
+            return Ok(0);
         };
 
-        let mut w = walk_mask.unwrap_or(0);
+        // Only the low 8 bits are direction flags.
+        let mut w = walk_mask.unwrap_or(0) as u8;
         if let Some(ov) = self.overrides.get(&t) {
             if let Some(f) = ov.force_mask {
                 w = f;
@@ -219,65 +233,56 @@ impl WalkCache {
             }
         }
 
-        let m = if w != 0 { Self::decode_mask(w) } else { HashMap::new() };
-        self.raw.insert(t, m.clone());
-        Ok(m)
+        self.raw.insert(t, w);
+        Ok(w)
     }
 
-    fn get_reconciled(&mut self, conn: &Connection, t: Tile) -> Result<HashMap<String, bool>> {
-        if let Some(m) = self.reconciled.get(&t) { return Ok(m.clone()); }
+    /// Drops any direction whose neighbour does not permit the reverse step, and any
+    /// diagonal whose two component cardinals are not both open.
+    fn get_reconciled(&mut self, conn: &Connection, t: Tile) -> Result<u8> {
         let mut base = self.get_raw(conn, t)?;
-        if base.is_empty() {
-            self.reconciled.insert(t, HashMap::new());
-            return Ok(HashMap::new());
+        if base == 0 {
+            return Ok(0);
         }
-        let (tx, ty, tp) = t;
-        
-        for key in ["left", "right", "top", "bottom"] {
-            if !base.get(key).copied().unwrap_or(false) { continue; }
-            if let Some((dx, dy, dp)) = key_delta(key) {
-                let n = (tx + dx, ty + dy, tp + dp);
-                let nwalk = self.get_raw(conn, n)?;
-                let recip = RECIP.iter().find(|(a, _)| *a == key).map(|(_, b)| *b).unwrap();
-                let nrecip = nwalk.get(recip).copied().unwrap_or(false);
-                if !nrecip { base.insert(key.to_string(), false); }
+
+        for bit in CARDINALS {
+            if base & (1 << bit) == 0 { continue; }
+            let nwalk = self.get_raw(conn, step(t, bit))?;
+            if nwalk & (1 << RECIP_BIT[bit as usize]) == 0 {
+                base &= !(1 << bit);
             }
         }
-        for key in ["topleft", "topright", "bottomleft", "bottomright"] {
-            if !base.get(key).copied().unwrap_or(false) { continue; }
-            if let Some((r1, r2)) = diag_require(key) {
-                if !(base.get(r1).copied().unwrap_or(false) && base.get(r2).copied().unwrap_or(false)) {
-                    base.insert(key.to_string(), false);
-                    continue;
-                }
+        // Runs after the cardinal pass so it sees the cleared cardinals, as before.
+        for bit in DIAGONALS {
+            if base & (1 << bit) == 0 { continue; }
+            let req = DIAG_REQ[bit as usize];
+            if base & req != req {
+                base &= !(1 << bit);
+                continue;
             }
-            if let Some((dx, dy, dp)) = key_delta(key) {
-                let n = (tx + dx, ty + dy, tp + dp);
-                let nwalk = self.get_raw(conn, n)?;
-                let recip = RECIP.iter().find(|(a, _)| *a == key).map(|(_, b)| *b).unwrap();
-                let nrecip = nwalk.get(recip).copied().unwrap_or(false);
-                if !nrecip { base.insert(key.to_string(), false); }
+            let nwalk = self.get_raw(conn, step(t, bit))?;
+            if nwalk & (1 << RECIP_BIT[bit as usize]) == 0 {
+                base &= !(1 << bit);
             }
         }
-        self.reconciled.insert(t, base.clone());
+
         Ok(base)
     }
 }
 
-fn neighbors_from_reconciled(map: &HashMap<String, bool>, t: Tile) -> Vec<Tile> {
-    let (x, y, p) = t;
-    let mut out = Vec::new();
-    for (k, allowed) in map.iter() {
-        if !*allowed { continue; }
-        if let Some((dx, dy, dp)) = key_delta(k) {
-            out.push((x + dx, y + dy, p + dp));
+/// Appends the tiles reachable in one step from `t` to `out`, which is reused
+/// across BFS iterations to avoid an allocation per tile.
+fn neighbors_from_reconciled(mask: u8, t: Tile, out: &mut Vec<Tile>) {
+    out.clear();
+    for bit in 0..8u8 {
+        if mask & (1 << bit) != 0 {
+            out.push(step(t, bit));
         }
     }
-    out
 }
 
-fn get_door_links(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
-    let mut adj: HashMap<Tile, Vec<Tile>> = HashMap::new();
+fn get_door_links(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+    let mut adj: TileMap<Vec<Tile>> = TileMap::default();
     let mut stmt = conn.prepare(
         "SELECT tile_inside_x, tile_inside_y, tile_inside_plane, tile_outside_x, tile_outside_y, tile_outside_plane FROM teleports_door_nodes",
     )?;
@@ -291,8 +296,8 @@ fn get_door_links(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
     Ok(adj)
 }
 
-fn get_lodestones(conn: &Connection) -> Result<(HashSet<Tile>, Vec<Tile>)> {
-    let mut set = HashSet::new();
+fn get_lodestones(conn: &Connection) -> Result<(TileSet, Vec<Tile>)> {
+    let mut set = TileSet::default();
     let mut list = Vec::new();
     let mut stmt = conn.prepare("SELECT dest_x, dest_y, dest_plane FROM teleports_lodestone_nodes")?;
     let mut rows = stmt.query([])?;
@@ -304,8 +309,8 @@ fn get_lodestones(conn: &Connection) -> Result<(HashSet<Tile>, Vec<Tile>)> {
     Ok((set, list))
 }
 
-fn get_object_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
-    let mut adj: HashMap<Tile, Vec<Tile>> = HashMap::new();
+fn get_object_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+    let mut adj: TileMap<Vec<Tile>> = TileMap::default();
     let mut stmt = conn.prepare(
         "SELECT orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_object_nodes",
     )?;
@@ -347,8 +352,8 @@ fn get_object_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>>
     Ok(adj)
 }
 
-fn get_npc_transitions(conn: &Connection) -> Result<HashMap<Tile, Vec<Tile>>> {
-    let mut adj: HashMap<Tile, Vec<Tile>> = HashMap::new();
+fn get_npc_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+    let mut adj: TileMap<Vec<Tile>> = TileMap::default();
     let mut stmt = conn.prepare(
         "SELECT orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_npc_nodes",
     )?;
@@ -465,11 +470,17 @@ fn get_ifslot_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
     Ok(out)
 }
 
+/// BFS over the walkable graph, emitting each tile to `sink` as soon as it is
+/// expanded. A tile's final walk mask only depends on its own reconciled mask and
+/// the neighbours that mask allows, and those neighbours are inserted into `vis`
+/// during the same iteration that pops the tile -- so the mask written here is
+/// identical to one computed against the completed reachable set.
 fn reachable_tiles(
     conn: &Connection,
     start: Tile,
-    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
-) -> Result<HashSet<Tile>> {
+    overrides: std::sync::Arc<TileMap<WalkMaskOverride>>,
+    sink: &SyncSender<Vec<(Tile, i64)>>,
+) -> Result<usize> {
     println!("Loading door links...");
     let door = get_door_links(conn)?;
     println!("Loaded {} door link origins with {} total destinations", door.len(), door.values().map(|v| v.len()).sum::<usize>());
@@ -494,7 +505,7 @@ fn reachable_tiles(
 
     let mut cache = WalkCache::new_with_overrides(overrides.clone());
     let mut q: VecDeque<Tile> = VecDeque::new();
-    let mut vis: HashSet<Tile> = HashSet::new();
+    let mut vis: TileSet = TileSet::default();
 
     q.push_back(start);
     vis.insert(start);
@@ -534,6 +545,8 @@ fn reachable_tiles(
 
     println!("Starting BFS from tile {:?}", start);
     let mut processed = 0usize;
+    let mut batch: Vec<(Tile, i64)> = Vec::with_capacity(EMIT_BATCH);
+    let mut nbuf: Vec<Tile> = Vec::with_capacity(8);
 
     while let Some(t) = q.pop_front() {
         processed += 1;
@@ -541,7 +554,8 @@ fn reachable_tiles(
             println!("Processed {} tiles so far; queue length {}", processed, q.len());
         }
         let rec = cache.get_reconciled(conn, t)?;
-        for n in neighbors_from_reconciled(&rec, t) {
+        neighbors_from_reconciled(rec, t, &mut nbuf);
+        for &n in nbuf.iter() {
             if vis.insert(n) { q.push_back(n); }
         }
         if let Some(v) = door.get(&t) {
@@ -570,11 +584,33 @@ fn reachable_tiles(
             }
             ifslot_enqueued = true;
         }
+
+        // Every neighbour this tile's mask allows is now in `vis`, so the sanitized
+        // mask is final and the tile can go straight to the writer.
+        let mut mask = sanitize_walk_mask_for_reachable(rec, t, &vis);
+        if let Some(ov) = overrides.get(&t) {
+            if let Some(f) = ov.force_mask {
+                mask = f;
+            } else {
+                mask |= ov.or_mask;
+            }
+        }
+        batch.push((t, mask as i64));
+        if batch.len() >= EMIT_BATCH {
+            sink.send(std::mem::take(&mut batch))
+                .map_err(|_| anyhow!("tile writer stopped accepting rows"))?;
+            batch = Vec::with_capacity(EMIT_BATCH);
+        }
+    }
+
+    if !batch.is_empty() {
+        sink.send(batch)
+            .map_err(|_| anyhow!("tile writer stopped accepting rows"))?;
     }
 
     println!("Finished BFS; processed {} tiles with {} reachable tiles discovered", processed, vis.len());
 
-    Ok(vis)
+    Ok(vis.len())
 }
 
 fn get_create_table_sql(conn: &Connection, table: &str) -> Result<String> {
@@ -619,153 +655,87 @@ fn get_tiles_row(conn: &Connection, cols: &[String], t: Tile) -> Result<Option<V
     }
 }
 
-fn sanitize_walk_mask_for_reachable(base: &HashMap<String, bool>, tile: Tile, reachable: &HashSet<Tile>) -> i64 {
-    let (x, y, p) = tile;
-    let mut m = base.clone();
-    for (k, v) in base.iter() {
-        if !*v { continue; }
-        if let Some((dx, dy, dp)) = key_delta(k) {
-            let n = (x + dx, y + dy, p + dp);
-            if !reachable.contains(&n) {
-                m.insert(k.clone(), false);
-            }
+fn sanitize_walk_mask_for_reachable(base: u8, tile: Tile, reachable: &TileSet) -> u8 {
+    let mut m = base;
+    for bit in 0..8u8 {
+        if base & (1 << bit) == 0 { continue; }
+        if !reachable.contains(&step(tile, bit)) {
+            m &= !(1 << bit);
         }
     }
-    WalkCache::encode_mask(&m)
+    m
 }
 
-fn create_tiles_and_insert(
-    // Use this opened connection to read schema and index definitions
-    src_meta: &Connection,
-    // Use file path so workers can open their own read connections
-    src_db_path: &Path,
-    dst: &mut Connection,
-    reachable: &HashSet<Tile>,
-    overrides: std::sync::Arc<HashMap<Tile, WalkMaskOverride>>,
-) -> Result<()> {
-    println!("Creating destination tiles table and inserting reachable tiles...");
-    let create_sql = get_create_table_sql(src_meta, "tiles")?;
-    let cols = get_table_columns(src_meta, "tiles")?;
-    let placeholders = (0..cols.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
-    let insert_sql = format!("INSERT INTO tiles ({}) VALUES ({})", cols.join(", "), placeholders);
-
-    // Prepare destination: create table and start single writer transaction
-    let tx = dst.transaction()?;
-    tx.execute(&create_sql, [])?;
-
-    // Channel between producers and single DB writer (this thread)
-    let (tx_rows, rx_rows) = mpsc::channel::<Vec<Vec<Value>>>();
-
-    // Columns/indices used by workers
-    let walk_idx = cols.iter().position(|c| c == "walk_mask");
-    let select_sql = format!("SELECT {} FROM tiles WHERE x=?1 AND y=?2 AND plane=?3", cols.join(", "));
-
-    // Share reachable as read-only among workers
-    let reachable_arc = std::sync::Arc::new(reachable.clone());
-
-    // Spawn producers in a separate thread so this thread can consume and write
-    let producer = {
-        let tx_rows = tx_rows.clone();
-        let select_sql = select_sql.clone();
-        let cols_len = cols.len();
-        let src_path = src_db_path.to_path_buf();
-        let overrides_arc = overrides.clone();
-        thread::spawn(move || {
-            // Process tiles in parallel and stream to writer in batches
-            let mut tiles: Vec<Tile> = reachable_arc.iter().copied().collect();
-            tiles.shrink_to_fit();
-            const BATCH: usize = 10_000;
-
-            tiles
-                .par_chunks(50_000)
-                .for_each_with(tx_rows.clone(), |sender, chunk| {
-                    // Each worker opens its own read-only connection and prepares statements
-                    let conn = match Connection::open(&src_path) {
-                        Ok(c) => c,
-                        Err(e) => { eprintln!("worker open src db error: {}", e); return; }
-                    };
-                    let mut sel = match conn.prepare(&select_sql) {
-                        Ok(s) => s,
-                        Err(e) => { eprintln!("worker prepare select error: {}", e); return; }
-                    };
-
-                    let mut cache = WalkCache::new_with_overrides(overrides_arc.clone());
-                    let mut out: Vec<Vec<Value>> = Vec::with_capacity(BATCH);
-                    for &t in chunk.iter() {
-                        match sel.query(params![t.0, t.1, t.2]) {
-                            Ok(mut rows) => match rows.next() {
-                                Ok(Some(r)) => {
-                                    let mut row = match read_row_values(r, cols_len) {
-                                        Ok(v) => v,
-                                        Err(e) => { eprintln!("read row error for {:?}: {}", t, e); continue; }
-                                    };
-                                    if let Some(idx) = walk_idx {
-                                        match cache.get_reconciled(&conn, t) {
-                                            Ok(rec) => {
-                                                let mut nm = sanitize_walk_mask_for_reachable(&rec, t, &reachable_arc);
-                                                if let Some(ov) = overrides_arc.get(&t) {
-                                                    if let Some(f) = ov.force_mask {
-                                                        nm = f;
-                                                    } else {
-                                                        nm |= ov.or_mask;
-                                                    }
-                                                }
-                                                row[idx] = Value::Integer(nm);
-                                            }
-                                            Err(e) => { eprintln!("reconcile error for {:?}: {}", t, e); }
-                                        }
-                                    }
-                                    out.push(row);
-                                    if out.len() >= BATCH {
-                                        if let Err(e) = sender.send(std::mem::take(&mut out)) { eprintln!("send batch error: {}", e); break; }
-                                    }
-                                }
-                                Ok(None) => { /* no row, skip */ }
-                                Err(e) => { eprintln!("rows.next() error for {:?}: {}", t, e); }
-                            },
-                            Err(e) => { eprintln!("select prepare/exec error for {:?}: {}", t, e); }
-                        }
-                    }
-                    if !out.is_empty() { let _ = sender.send(out); }
-                });
-            // Dropping tx_rows closes channel
-        })
-    };
-
-    drop(tx_rows);
-
-    // Consume and insert on this thread (owning the transaction/connection)
-    let mut insert_stmt = tx.prepare(&insert_sql)?;
-    let mut inserted = 0usize;
-    for batch in rx_rows {
-        for row in batch.into_iter() {
-            insert_stmt.execute(params_from_iter(row.into_iter()))?;
-            inserted += 1;
-            if inserted % 5000 == 0 { println!("Inserted {} tiles so far...", inserted); }
-        }
-    }
-    drop(insert_stmt);
-    tx.commit()?;
-    println!("Committed tiles insertion transaction");
-    println!("Finished inserting {} tiles", inserted);
-
-    // Ensure producers are done
-    let _ = producer.join();
-
-    // Recreate tile indexes on destination from source metadata
-    let mut idx_stmt = src_meta.prepare(
-        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='tiles' AND sql IS NOT NULL",
+fn get_index_sql(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
     )?;
-    let mut rows = idx_stmt.query([])?;
-    let mut index_count = 0usize;
-    while let Some(r) = rows.next()? {
-        let sql: String = r.get(0)?;
-        let _ = dst.execute(&sql, []);
-        index_count += 1;
-    }
-    println!("Recreated {} tile indexes", index_count);
+    let sqls = stmt
+        .query_map([table], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(sqls)
+}
 
-    Ok(())
+/// Consumes tiles as the BFS discovers them, fetching each row from the source and
+/// inserting it into the destination under a single transaction. Hands the
+/// destination connection back on join so the caller can copy the remaining tables.
+fn spawn_tile_writer(
+    src_db_path: &Path,
+    mut dst: Connection,
+    create_sql: String,
+    cols: Vec<String>,
+    index_sqls: Vec<String>,
+    rx_rows: mpsc::Receiver<Vec<(Tile, i64)>>,
+) -> thread::JoinHandle<Result<(Connection, usize)>> {
+    let src_path: PathBuf = src_db_path.to_path_buf();
+    thread::spawn(move || -> Result<(Connection, usize)> {
+        let src = Connection::open(&src_path)
+            .with_context(|| format!("Open DB {}", src_path.display()))?;
+        tune_read_conn(&src)?;
+
+        let placeholders = (0..cols.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+        let insert_sql = format!("INSERT INTO tiles ({}) VALUES ({})", cols.join(", "), placeholders);
+        let select_sql = format!("SELECT {} FROM tiles WHERE x=?1 AND y=?2 AND plane=?3", cols.join(", "));
+        let walk_idx = cols.iter().position(|c| c == "walk_mask");
+        let ncols = cols.len();
+
+        let tx = dst.transaction()?;
+        tx.execute(&create_sql, [])?;
+
+        let mut inserted = 0usize;
+        {
+            let mut sel = src.prepare(&select_sql)?;
+            let mut ins = tx.prepare(&insert_sql)?;
+            for batch in rx_rows {
+                for (t, mask) in batch {
+                    let mut rows = sel.query(params![t.0, t.1, t.2])?;
+                    let Some(r) = rows.next()? else { continue };
+                    let mut row = read_row_values(r, ncols)?;
+                    if let Some(idx) = walk_idx {
+                        row[idx] = Value::Integer(mask);
+                    }
+                    ins.execute(params_from_iter(row.into_iter()))?;
+                    inserted += 1;
+                    if inserted % 100_000 == 0 {
+                        println!("Inserted {} tiles so far...", inserted);
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        println!("Committed tiles insertion transaction");
+        println!("Finished inserting {} tiles", inserted);
+
+        // Indexes are created after the bulk insert so they are built in one pass.
+        let mut index_count = 0usize;
+        for sql in &index_sqls {
+            let _ = dst.execute(sql, []);
+            index_count += 1;
+        }
+        println!("Recreated {} tile indexes", index_count);
+
+        Ok((dst, inserted))
+    })
 }
 
 fn copy_tables(src: &Connection, dst: &mut Connection, skip: &HashSet<String>) -> Result<()> {
@@ -846,23 +816,42 @@ pub fn cmd_tile_cleaner(src_db: &Path, out_db: &Path, start_x: i32, start_y: i32
     let src = Connection::open(src_db).with_context(|| format!("Open DB {}", src_db.display()))?;
     println!("Opened source database {}", src_db.display());
     src.execute_batch("PRAGMA foreign_keys=ON;")?;
+    tune_read_conn(&src)?;
     let start: Tile = (start_x, start_y, start_plane);
-    println!("Computing reachable tiles...");
     let overrides = build_fairy_ring_overrides(&src)?;
-    let reachable = reachable_tiles(&src, start, overrides.clone())?;
-    println!("Identified {} reachable tiles", reachable.len());
 
+    // Destination is prepared up front so the writer can run alongside the BFS.
     if out_db.exists() {
         println!("Removing existing output database {}", out_db.display());
         let _ = fs::remove_file(out_db);
     }
-    let mut dst = Connection::open(out_db).with_context(|| format!("Create DB {}", out_db.display()))?;
+    let dst = Connection::open(out_db).with_context(|| format!("Create DB {}", out_db.display()))?;
     println!("Opened destination database {}", out_db.display());
     // Match Python behavior: avoid FK errors while creating/inserting tiles before copying 'chunks'
     dst.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    tune_write_conn(&dst)?;
     println!("Disabled foreign key checks on destination");
 
-    create_tiles_and_insert(&src, src_db, &mut dst, &reachable, overrides)?;
+    let create_sql = get_create_table_sql(&src, "tiles")?;
+    let cols = get_table_columns(&src, "tiles")?;
+    let index_sqls = get_index_sql(&src, "tiles")?;
+
+    let (tx_rows, rx_rows) = mpsc::sync_channel::<Vec<(Tile, i64)>>(CHANNEL_DEPTH);
+    println!("Starting tile writer; reachable tiles are inserted as they are discovered");
+    let writer = spawn_tile_writer(src_db, dst, create_sql, cols, index_sqls, rx_rows);
+
+    println!("Computing reachable tiles...");
+    let bfs = reachable_tiles(&src, start, overrides, &tx_rows);
+    // Closing the channel lets the writer commit once the BFS is done.
+    drop(tx_rows);
+
+    // Prefer the writer's error: a failed BFS send is usually a symptom of it.
+    let (mut dst, _inserted) = match writer.join() {
+        Ok(res) => res?,
+        Err(_) => return Err(anyhow!("tile writer thread panicked")),
+    };
+    let reachable_count = bfs?;
+    println!("Identified {} reachable tiles", reachable_count);
 
     let mut skip = HashSet::new();
     skip.insert("tiles".to_string());
