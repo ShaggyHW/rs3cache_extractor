@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+mod cache;
 mod util;
 mod db;
 mod commands;
+mod walk;
 
 #[derive(Parser, Debug)]
 #[command(name = "rs3cache_extractor", version, about = "Tools for RS3 cache extraction")] 
@@ -62,10 +64,38 @@ enum Commands {
         /// Start plane (default: 0)
         #[arg(long, default_value_t = 0)]
         start_plane: i32,
-    }
+    },
 
-
-   
+    /// Extract walk flags from the cache (replaces the node `walkflags` command).
+    /// Writes json, or straight into tiles.db, or both.
+    Walkflags {
+        /// NXT cache directory containing the js5-*.jcache files
+        #[arg(long, short = 'o')]
+        cache: PathBuf,
+        /// Write <save>/walk/<x>-<z>.json, as the node script did
+        #[arg(long, short = 's')]
+        save: Option<PathBuf>,
+        /// Write tiles straight into this sqlite db, skipping json entirely
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Overrides file with lines: x,y,plane,walk_mask (requires --db)
+        #[arg(long)]
+        overrides: Option<PathBuf>,
+        /// Full diagnostics log; problems also go to the console
+        #[arg(long, default_value = "walkflags.log")]
+        log: PathBuf,
+        /// Report problems on the console only, without writing a log file
+        #[arg(long)]
+        no_log_file: bool,
+        #[arg(long, default_value_t = 0)]
+        startx: i32,
+        #[arg(long, default_value_t = 0)]
+        startz: i32,
+        #[arg(long, default_value_t = 128)]
+        sizex: i32,
+        #[arg(long, default_value_t = 200)]
+        sizez: i32,
+    },
 }
 
 fn main() -> Result<()> {
@@ -86,6 +116,19 @@ fn main() -> Result<()> {
             let out_path = out.unwrap_or(root.join("worldReachableTiles.db"));
             commands::tile_cleaner::cmd_tile_cleaner(&src_path, &out_path, start_x, start_y, start_plane)
         }
+        Commands::Walkflags { cache, save, db, overrides, log, no_log_file, startx, startz, sizex, sizez } => {
+            commands::walkflags::cmd_walkflags(&commands::walkflags::WalkflagsOpts {
+                cache_dir: &cache,
+                save_dir: save.as_deref(),
+                db: db.as_deref(),
+                overrides: overrides.as_deref(),
+                log: if no_log_file { None } else { Some(&log) },
+                startx,
+                startz,
+                sizex,
+                sizez,
+            })
         }
+    }
 }
 // (All DB schema and loading logic is now in `db` and `commands` modules.)

@@ -220,6 +220,9 @@ CREATE TABLE teleports_requirements (
     comparison TEXT
 );
 
+-- WITHOUT ROWID: the payload is one byte per tile, so a second (rowid) b-tree
+-- would roughly double both the write cost and the file size. Every consumer
+-- looks tiles up by (x, y, plane) or scans the table; nothing uses rowid.
 CREATE TABLE tiles (
     x INTEGER,
     y INTEGER,
@@ -227,7 +230,7 @@ CREATE TABLE tiles (
     walk_mask INTEGER,
     RegionID INTEGER,
     PRIMARY KEY (x, y, plane)
-);
+) WITHOUT ROWID;
 
 -- ========== INDEXES ==========
 

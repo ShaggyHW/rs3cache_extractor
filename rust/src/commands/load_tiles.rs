@@ -57,7 +57,7 @@ pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path, overrides_path: Option
     Ok(())
 }
 
-fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
+pub fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("Overrides file not found: {}", path.display());
     }
@@ -138,10 +138,8 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
 
     drop(tx_msg);
 
-    // Optimize SQLite for bulk load and avoid maintaining indexes during insert
-    conn.execute_batch(
-        "PRAGMA foreign_keys=OFF;\nDROP INDEX IF EXISTS idx_tiles_walkable;",
-    )?;
+    // Optimize SQLite for bulk load
+    conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
 
     // Single transaction and prepared statement reused for entire stream
     let txw = conn.transaction()?;
@@ -161,10 +159,8 @@ fn load_json_files(folder: &Path, conn: &mut Connection) -> Result<()> {
     drop(tiles_stmt);
     txw.commit()?;
 
-    // Recreate index and restore FK checks after load
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_tiles_walkable ON tiles(x, y, plane);\nPRAGMA foreign_keys=ON;",
-    )?;
+    // Restore FK checks after load
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
 
     // Ensure producers are finished
     let _ = producer.join();

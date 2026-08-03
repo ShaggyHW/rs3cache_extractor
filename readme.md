@@ -1,12 +1,8 @@
 # TILE DATA EXTRACTION
 
 ```sh
-npm install
-npm run build
+cargo run --release --manifest-path rust/Cargo.toml -- walkflags -o /home/query/.local/share/bolt-launcher/Jagex/RuneScape/ --db tiles.db --overrides override.txt --startx 0 --startz 0
 
-node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
-
-cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db tiles.db --overrides override.txt
 cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo' --db tiles.db
 cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
 
@@ -15,6 +11,50 @@ walk_mask_decode.py --encode left
 
 
 ```
+
+`walkflags` is a port of the old `node dist/cli walkflags` script. It reads the
+NXT sqlite cache directly and, with `--db`, writes tiles straight into
+`tiles.db` and applies `--overrides` — so it replaces `load-tiles` as well. The
+two node/`load-tiles` steps it supersedes were:
+
+```sh
+npm install && npm run build
+node dist/cli walkflags -o cache:/home/query/.local/share/bolt-launcher/Jagex/RuneScape/ -s ./out --startx 0 --startz 0
+cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db tiles.db --overrides override.txt
+```
+
+`-s <dir>` still writes the old `<dir>/walk/<x>-<z>.json` files, byte for byte
+identical to the node version's output; it is useful for diffing but the json
+only ever contributed one column (`walkMask`) to the database. `-s` and `--db`
+can be combined, and `--db` needs a database that does not exist yet.
+
+## Decode diagnostics
+
+Anything that goes wrong while decoding an object opcode stream, a mapsquare or
+a loc placement is reported on the console and written in full to
+`walkflags.log` (`--log <path>` to move it, `--no-log-file` for console only).
+The console shows the first 25 messages of each kind and always ends with
+per-kind totals, so a flood of repeats does not bury the run.
+
+This mirrors what the node exporter printed via `console.warn`, with the same
+opcode numbers and byte offsets. A current cache reports roughly:
+
+```
+diagnostics:
+  loc dropped (no definition)      3487
+  loc morph unresolved             1
+  object decode                    84
+  object missing terminator        42
+  object unknown opcode            2236
+```
+
+These are real gaps, not noise. `objects.jsonc` has no entry for opcodes such as
+`0x04`, `0x06`-`0x08`, `0x10`, `0x26`, `0x32`, `0x6C`-`0x6E`, `0x70`, `0x95` and
+`0xCE`, which newer caches do use. The decoder does what the js one did — warn
+and skip a single byte — but that desynchronises the rest of that definition,
+which is why 84 objects then fail outright and ~3.5k loc placements are dropped
+without contributing collision. Adding the missing opcodes to the table is the
+fix; the log lists every affected object id and byte offset.
 
 # RuneScape Model Viewer (.js)
 A RuneScape cache downloader, decoder and model viewer implemented in TypeScript. The tool will download the cache directly from the game servers and decode parts of into usable data and models. 

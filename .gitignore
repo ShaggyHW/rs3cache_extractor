@@ -1,5 +1,6 @@
 
 /out
+walkflags.log
 worldReachableTiles.db-wal
 worldReachableTiles.db-shm
 worldReachableTiles.db
@@ -16,3 +17,4 @@ dist/3d/animationframes.ts
 /node_modules
 /extract_map
 /cache
+tiles_old.db
