@@ -251,8 +251,8 @@ CREATE TABLE tiles (
 --    ON cluster_intraconnections(entrance_from, entrance_to);
 
 -- removed: idx_tiles_chunk / idx_tiles_chunk_boundary (chunk-based)
-CREATE INDEX idx_tiles_walkable
-    ON tiles(x, y, plane);
+-- removed: idx_tiles_walkable ON tiles(x, y, plane) -- exact duplicate of the
+-- primary key, which is the table itself now that tiles is WITHOUT ROWID
 
 --CREATE INDEX idx_tiles_xyplane
 --    ON tiles(x, y, plane);
