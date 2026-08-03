@@ -81,12 +81,25 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
             println!("db output  : {}", db.display());
             let mut conn = Connection::open(db)
                 .with_context(|| format!("opening db at {}", db.display()))?;
+            // Bulk-build settings. page_size has to be set before the first
+            // table exists. The journal is disabled outright: this db is
+            // created from scratch every run and is regenerable in under a
+            // minute, so there is nothing to recover to. Both are restored to
+            // ordinary values once the load finishes.
             conn.execute_batch(
-                "PRAGMA journal_mode=WAL;\nPRAGMA synchronous=NORMAL;\nPRAGMA temp_store=MEMORY;\nPRAGMA cache_size=-262144;",
+                "PRAGMA page_size=16384;\n\
+                 PRAGMA journal_mode=OFF;\n\
+                 PRAGMA synchronous=OFF;\n\
+                 PRAGMA temp_store=MEMORY;\n\
+                 PRAGMA cache_size=-262144;",
             )?;
             crate::db::create_tables(&mut conn)?;
             conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
-            Some(conn)
+            Some(DbSink::new(
+                conn,
+                db.to_path_buf(),
+                opts.overrides.map(|p| p.to_path_buf()),
+            ))
         }
         None => None,
     };
@@ -111,8 +124,10 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
     // kept for a sliding window of three columns instead of the whole world.
     let mut cache: SquareCache = HashMap::new();
     let mut dropped_loc_ids: HashMap<u32, usize> = HashMap::new();
+    let (mut t_load, mut t_work, mut t_sort, mut t_insert) = (0f64, 0f64, 0f64, 0f64);
 
     for cx in opts.startx..opts.startx + opts.sizex {
+        let t0 = Instant::now();
         for column in [cx - 1, cx, cx + 1] {
             load_column(
                 &source,
@@ -125,6 +140,8 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
             );
         }
         cache.retain(|(kx, _), _| *kx >= cx - 1);
+        t_load += t0.elapsed().as_secs_f64();
+        let t1 = Instant::now();
 
         let want_rows = conn.is_some();
         let column_out: Vec<ChunkOutput> = (opts.startz..opts.startz + opts.sizez)
@@ -189,6 +206,8 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
             })
             .collect();
 
+        t_work += t1.elapsed().as_secs_f64();
+
         let mut dropped_this_column = 0usize;
         for out in &column_out {
             for id in &out.dropped_locs {
@@ -198,14 +217,21 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
         }
         diag.count(KIND_LOC_DROPPED, dropped_this_column);
 
-        if let Some(conn) = conn.as_mut() {
+        if let Some(sink) = conn.as_mut() {
+            let t2 = Instant::now();
             let mut rows: Vec<TileRow> = column_out.into_iter().flat_map(|q| q.rows).collect();
             // Every column covers a disjoint, ascending x range, so sorting
             // within a column feeds sqlite globally ascending primary keys.
             rows.par_sort_unstable_by_key(|row| row.key);
             tiles_total.fetch_add(rows.len(), Ordering::Relaxed);
-            insert_rows(conn, &rows)
-                .with_context(|| format!("inserting tiles of column {}", cx))?;
+            t_sort += t2.elapsed().as_secs_f64();
+            // Handing the column off only blocks once the writer is two
+            // columns behind, so this time is writer backpressure, not the
+            // cost of the insert itself.
+            let t3 = Instant::now();
+            sink.send(rows)
+                .with_context(|| format!("queueing tiles of column {}", cx))?;
+            t_insert += t3.elapsed().as_secs_f64();
         }
 
         let done = processed.load(Ordering::Relaxed);
@@ -219,11 +245,11 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
         }
     }
 
-    if let Some(conn) = conn.as_mut() {
-        if let Some(overrides) = opts.overrides {
-            crate::commands::load_tiles::apply_overrides_file(overrides, conn)?;
-        }
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+    // Drains the queue, applies the overrides and restores the pragmas.
+    if let Some(sink) = conn.take() {
+        let t = Instant::now();
+        sink.finish()?;
+        t_insert += t.elapsed().as_secs_f64();
     }
 
     if !dropped_loc_ids.is_empty() {
@@ -263,27 +289,150 @@ pub fn cmd_walkflags(opts: &WalkflagsOpts) -> Result<()> {
         errors.load(Ordering::Relaxed),
         started.elapsed().as_secs_f64()
     );
+    // "db write" is wall time the main loop spent blocked on the writer plus the
+    // final drain and fsync; the insert itself overlaps everything above it.
+    println!(
+        "phases: square load {:.1}s, chunk work {:.1}s, sort {:.1}s, db write+flush {:.1}s",
+        t_load, t_work, t_sort, t_insert
+    );
     diag.finish()?;
     Ok(())
+}
+
+/// Rows per multi-row INSERT. One statement per row costs a VDBE program
+/// invocation each, which dominated the whole extraction; batching amortises it.
+/// 256 * 5 params stays well under SQLITE_MAX_VARIABLE_NUMBER.
+const INSERT_BATCH: usize = 256;
+
+fn insert_sql(rows: usize) -> String {
+    let mut sql =
+        String::from("INSERT OR REPLACE INTO tiles (x, y, plane, walk_mask, RegionID) VALUES ");
+    for i in 0..rows {
+        if i > 0 {
+            sql.push(',');
+        }
+        sql.push_str("(?,?,?,?,?)");
+    }
+    sql
+}
+
+fn bind_row(stmt: &mut rusqlite::Statement, base: usize, row: &TileRow) -> Result<()> {
+    stmt.raw_bind_parameter(base + 1, row.x())?;
+    stmt.raw_bind_parameter(base + 2, row.y())?;
+    stmt.raw_bind_parameter(base + 3, row.plane())?;
+    stmt.raw_bind_parameter(base + 4, row.walk_mask as i64)?;
+    stmt.raw_bind_parameter(base + 5, row.region_id())?;
+    Ok(())
+}
+
+/// Owns the sqlite connection on its own thread so inserting one column
+/// overlaps decoding and collision for the next one.
+///
+/// Columns still arrive in ascending x order, which keeps the primary key
+/// writes sequential — the reason each column is sorted before being sent.
+struct DbSink {
+    tx: Option<std::sync::mpsc::SyncSender<Vec<TileRow>>>,
+    handle: Option<std::thread::JoinHandle<Result<()>>>,
+}
+
+impl DbSink {
+    fn new(
+        mut conn: Connection,
+        db_path: std::path::PathBuf,
+        overrides: Option<std::path::PathBuf>,
+    ) -> Self {
+        // Bounded so a slow disk applies backpressure instead of letting
+        // decoded columns pile up in memory.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<TileRow>>(2);
+        let handle = std::thread::Builder::new()
+            .name("tiles-writer".into())
+            .spawn(move || -> Result<()> {
+                for rows in rx {
+                    insert_rows(&mut conn, &rows)?;
+                }
+                let t_ovr = Instant::now();
+                if let Some(path) = overrides {
+                    crate::commands::load_tiles::apply_overrides_file(&path, &mut conn)?;
+                }
+                let ovr_secs = t_ovr.elapsed().as_secs_f64();
+                let t_prag = Instant::now();
+                conn.execute_batch(
+                    "PRAGMA foreign_keys=ON;\nPRAGMA journal_mode=DELETE;\nPRAGMA synchronous=FULL;",
+                )?;
+                let prag_secs = t_prag.elapsed().as_secs_f64();
+                let t_close = Instant::now();
+                drop(conn);
+                let close_secs = t_close.elapsed().as_secs_f64();
+                // The load runs with synchronous=OFF, so at this point a lot of
+                // the db can still be sitting in the page cache. Force it out
+                // before reporting completion — otherwise the run looks ~35s
+                // faster than it is and the file is not actually durable yet.
+                let bytes = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+                println!(
+                    "flushing {:.1} GB to disk (the load runs with synchronous=OFF, so most \
+                     of the writing lands here)...",
+                    bytes as f64 / 1e9
+                );
+                let t_sync = Instant::now();
+                fs::File::open(&db_path)
+                    .and_then(|f| f.sync_all())
+                    .with_context(|| format!("flushing {} to disk", db_path.display()))?;
+                let sync_secs = t_sync.elapsed().as_secs_f64();
+                println!(
+                    "  tail: overrides {:.2}s, pragmas {:.2}s, close {:.2}s, flush {:.1}s \
+                     ({:.0} MB/s)",
+                    ovr_secs,
+                    prag_secs,
+                    close_secs,
+                    sync_secs,
+                    if sync_secs > 0.0 { bytes as f64 / 1e6 / sync_secs } else { 0.0 }
+                );
+                Ok(())
+            })
+            .expect("spawning the tiles writer thread");
+        DbSink { tx: Some(tx), handle: Some(handle) }
+    }
+
+    /// Blocks while the writer is behind. A send error means the writer died;
+    /// the real cause surfaces from `finish`.
+    fn send(&mut self, rows: Vec<TileRow>) -> Result<()> {
+        match self.tx.as_ref().unwrap().send(rows) {
+            Ok(()) => Ok(()),
+            Err(_) => bail!("the tiles writer stopped accepting rows"),
+        }
+    }
+
+    fn finish(mut self) -> Result<()> {
+        drop(self.tx.take());
+        match self.handle.take().unwrap().join() {
+            Ok(result) => result,
+            Err(_) => bail!("the tiles writer thread panicked"),
+        }
+    }
 }
 
 fn insert_rows(conn: &mut Connection, rows: &[TileRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
+    let batch_sql = insert_sql(INSERT_BATCH);
     let tx = conn.transaction()?;
     {
-        let mut stmt = tx.prepare_cached(
-            "INSERT OR REPLACE INTO tiles (x, y, plane, walk_mask, RegionID) VALUES (?1, ?2, ?3, ?4, ?5)",
-        )?;
-        for row in rows {
-            stmt.execute(rusqlite::params![
-                row.x(),
-                row.y(),
-                row.plane(),
-                row.walk_mask as i64,
-                row.region_id()
-            ])?;
+        let mut full = tx.prepare_cached(&batch_sql)?;
+        let mut chunks = rows.chunks_exact(INSERT_BATCH);
+        for chunk in &mut chunks {
+            for (i, row) in chunk.iter().enumerate() {
+                bind_row(&mut full, i * 5, row)?;
+            }
+            full.raw_execute()?;
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut tail = tx.prepare(&insert_sql(rest.len()))?;
+            for (i, row) in rest.iter().enumerate() {
+                bind_row(&mut tail, i * 5, row)?;
+            }
+            tail.raw_execute()?;
         }
     }
     tx.commit()?;
