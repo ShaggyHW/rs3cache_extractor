@@ -262,8 +262,66 @@ fn parse_object_inner(buf: &[u8], issues: &mut Vec<OpcodeIssue>) -> Result<RawOb
                 let count = r.ubyte()? as usize;
                 r.skip(count * 27)?;
             }
-            0xcd => r.skip(1)?,
+            // objects.jsonc declares 0xCD as a single byte, but it is really a
+            // nested structure (Hoor2 gs_cache_defs.c op 205). Reading one byte
+            // desynced the rest of every definition that uses it.
+            0xcd => {
+                r.skip(2 + 2 + 2)?; // leading, v1, v2
+                let flags = r.ubyte()?;
+                if flags & 0x1 != 0 {
+                    let outer = r.ubyte()? as usize;
+                    for _ in 0..outer {
+                        r.skip(1)?;
+                        let inner = r.ubyte()? as usize;
+                        for _ in 0..inner {
+                            r.skip(4)?;
+                            r.varuint()?;
+                            let t = r.ubyte()?;
+                            r.skip(t.min(3) as usize)?;
+                        }
+                    }
+                }
+                if flags & 0x2 != 0 {
+                    let outer = r.ubyte()? as usize;
+                    for _ in 0..outer {
+                        r.skip(1)?;
+                        let inner = r.ubyte()? as usize;
+                        for _ in 0..inner {
+                            r.skip(4)?;
+                            r.varuint()?;
+                        }
+                    }
+                }
+                for bit in [0x4u8, 0x8] {
+                    if flags & bit != 0 {
+                        let outer = r.ubyte()? as usize;
+                        for _ in 0..outer {
+                            r.skip(1)?;
+                            let inner = r.ubyte()? as usize;
+                            r.skip(inner * 8)?;
+                        }
+                    }
+                }
+                if flags & 0x10 != 0 {
+                    let count = r.ubyte()? as usize;
+                    r.skip(count * 8)?;
+                }
+                r.skip(2)?; // trailing
+            }
             0xde => r.skip(1)?,
+            // Opcodes below are absent from src/opcodes/objects.jsonc, which is
+            // why the js decoder desynced on them. Widths taken from the NXT
+            // decoder in Hoor2 (launcher/src/payload/gs_cache_defs.c,
+            // gs_cache_object_def) where they are ops 108-110 and 206.
+            0x6c | 0x6d | 0x6e => {}
+            0xce => {
+                r.skip(2)?;
+                let count = r.ubyte()? as usize;
+                for _ in 0..count {
+                    // flags, xyz, byte, float, 24-bit, 2x ushort, 3x int
+                    r.skip(1 + 12 + 1 + 4 + 3 + 4 + 12)?;
+                }
+            }
             // extra: extrasmap
             0xf9 => {
                 let count = r.ubyte()? as usize;

@@ -18,3 +18,4 @@ dist/3d/animationframes.ts
 /extract_map
 /cache
 tiles_old.db
+tiles_fixed.db

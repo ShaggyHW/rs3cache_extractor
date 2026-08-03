@@ -96,6 +96,15 @@ enum Commands {
         #[arg(long, default_value_t = 200)]
         sizez: i32,
     },
+
+    /// Hex dump one location definition's raw opcode stream, for debugging the decoder
+    DumpObject {
+        /// NXT cache directory containing the js5-*.jcache files
+        #[arg(long, short = 'o')]
+        cache: PathBuf,
+        /// Location definition id
+        id: u32,
+    },
 }
 
 fn main() -> Result<()> {
@@ -129,6 +138,7 @@ fn main() -> Result<()> {
                 sizez,
             })
         }
+        Commands::DumpObject { cache, id } => commands::walkflags::cmd_dump_object(&cache, id),
     }
 }
 // (All DB schema and loading logic is now in `db` and `commands` modules.)

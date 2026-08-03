@@ -99,6 +99,11 @@
 	"0x69": { "name":                      "invertMapScene", "read": "true" },
 	"0x6A": { "name":                          "headModels", "read": [ "array", ["struct", ["model", "varuint"], ["unknown_2", "unsigned byte"]] ] },
 	"0x6B": { "name":                         "mapFunction", "read": "unsigned short" },
+	//0x6C-0x6E carry no operand. Missing here until now, which desynced every
+	//definition that used them (see readme, decode diagnostics).
+	"0x6C": { "name":                          "unknown_6C", "read": "true" },
+	"0x6D": { "name":                          "unknown_6D", "read": "true" },
+	"0x6E": { "name":                          "unknown_6E", "read": "true" },
 	"0x71": { "name":                          "unknown_71", "read": "unsigned byte" },
 	"0x96": { "name":                    "members_action_1", "read": "string" },
 	"0x97": { "name":                    "members_action_2", "read": "string" },
@@ -137,7 +142,59 @@
 	"0xCA": { "name":						 "singleuse_CA", "read": "unsigned byte" },
 	"0xCB": { "name":						   "unknown_CB", "read": "true" },
 	"0xCC": { "name":						   "unknown_CC", "read": ["array","ubyte",["buffer",27,"hex"]] },
-	"0xCD": { "name":						   "unknown_CD", "read": "unsigned byte" },
+	//0xCD was declared as a single byte, but it is really a nested structure, so
+	//reading one byte desynced the rest of every definition using it. Widths
+	//mirror the NXT decoder (Hoor2 launcher/src/payload/gs_cache_defs.c op 205).
+	"0xCD": { "name":						   "unknown_CD", "read": ["struct",
+																["leading","ushort"],
+																["v1","ushort"],
+																["v2","ushort"],
+																["flags","ubyte"],
+																["group1",["opt",["flags",0,"bitflag"],["array","ubyte",["struct",
+																	["unk","ubyte"],
+																	["entries",["array","ubyte",["struct",
+																		["a","ushort"],
+																		["b","ushort"],
+																		["model","varuint"],
+																		["t","ubyte"],
+																		["t1",["opt",["t",1,"gteq"],"ubyte"]],
+																		["t2",["opt",["t",2,"gteq"],"ubyte"]],
+																		["t3",["opt",["t",3,"gteq"],"ubyte"]]
+																	]]]
+																]]]],
+																["group2",["opt",["flags",1,"bitflag"],["array","ubyte",["struct",
+																	["unk","ubyte"],
+																	["entries",["array","ubyte",["tuple","ushort","ushort","varuint"]]]
+																]]]],
+																["group3",["opt",["flags",2,"bitflag"],["array","ubyte",["struct",
+																	["unk","ubyte"],
+																	["entries",["array","ubyte",["buffer",8,"hex"]]]
+																]]]],
+																["group4",["opt",["flags",3,"bitflag"],["array","ubyte",["struct",
+																	["unk","ubyte"],
+																	["entries",["array","ubyte",["buffer",8,"hex"]]]
+																]]]],
+																["group5",["opt",["flags",4,"bitflag"],["array","ubyte",["buffer",8,"hex"]]]],
+																["trailing","ushort"]
+															]},
+	//0xCE was missing entirely (Hoor2 op 206).
+	"0xCE": { "name":						   "unknown_CE", "read": ["struct",
+																["leading","ushort"],
+																["entries",["array","ubyte",["struct",
+																	["flags","ubyte"],
+																	["x","int"],
+																	["y","int"],
+																	["z","int"],
+																	["byte","ubyte"],
+																	["float","int"],
+																	["tri","unsigned tribyte"],
+																	["s1","ushort"],
+																	["s2","ushort"],
+																	["i1","int"],
+																	["i2","int"],
+																	["i3","int"]
+																]]]
+															]},
 	"0xDE": { "name":						   "unknown_DE", "read": "unsigned byte" },
 	"0xF9": { "name":                               "extra", "read": "extrasmap" }
 }

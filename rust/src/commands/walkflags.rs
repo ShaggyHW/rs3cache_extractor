@@ -415,6 +415,45 @@ fn load_object_defs(
     Ok((defs, statuses))
 }
 
+/// Dumps one location definition's raw bytes plus what the decoder made of
+/// them. Exists to work out operand widths for opcodes the table is missing.
+pub fn cmd_dump_object(cache_dir: &Path, id: u32) -> Result<()> {
+    let source = CacheSource::new(cache_dir)?;
+    let table = source.open_table(MAJOR_OBJECTS)?;
+    let minor = id / OBJECTS_PER_ARCHIVE;
+    let subid = id % OBJECTS_PER_ARCHIVE;
+    let (archive, ranges) = table
+        .archive(minor)?
+        .ok_or_else(|| anyhow::anyhow!("object archive {} not found", minor))?;
+    let range = ranges
+        .iter()
+        .find(|q| q.fileid == subid)
+        .ok_or_else(|| anyhow::anyhow!("object {} not found in archive {}", id, minor))?;
+    let buf = &archive[range.start..range.end];
+
+    println!("object {} (archive {}, file {}), {} bytes", id, minor, subid, buf.len());
+    for (i, chunk) in buf.chunks(16).enumerate() {
+        let hex: Vec<String> = chunk.iter().map(|b| format!("{:02X}", b)).collect();
+        println!("{:04X}  {}", i * 16, hex.join(" "));
+    }
+
+    let result = parse_object(buf);
+    for issue in &result.issues {
+        match issue {
+            OpcodeIssue::Unknown { opcode, position } => {
+                println!("issue: unknown chunk 0x{:02X} at position {}", opcode, position)
+            }
+            OpcodeIssue::MissingTerminator => println!("issue: no 0x00 terminator"),
+        }
+    }
+    match (&result.obj, &result.error) {
+        (Some(obj), _) => println!("decoded: {:?}", obj),
+        (None, Some(e)) => println!("failed: {:#}", e),
+        (None, None) => println!("failed with no error recorded"),
+    }
+    Ok(())
+}
+
 /// Writes via a temp file so an interrupted run cannot leave a half written
 /// json behind for the loader to choke on.
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {

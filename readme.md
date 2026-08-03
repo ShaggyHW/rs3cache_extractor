@@ -37,24 +37,40 @@ The console shows the first 25 messages of each kind and always ends with
 per-kind totals, so a flood of repeats does not bury the run.
 
 This mirrors what the node exporter printed via `console.warn`, with the same
-opcode numbers and byte offsets. A current cache reports roughly:
+opcode numbers and byte offsets. A current cache should report
+`diagnostics: no problems reported`; anything else means the opcode table has
+fallen behind the cache again (see below).
 
-```
-diagnostics:
-  loc dropped (no definition)      3487
-  loc morph unresolved             1
-  object decode                    84
-  object missing terminator        42
-  object unknown opcode            2236
-```
+`dump-object -o <cachedir> <id>` hex dumps one definition's opcode stream next
+to what the decoder made of it, which is how operand widths get worked out.
 
-These are real gaps, not noise. `objects.jsonc` has no entry for opcodes such as
-`0x04`, `0x06`-`0x08`, `0x10`, `0x26`, `0x32`, `0x6C`-`0x6E`, `0x70`, `0x95` and
-`0xCE`, which newer caches do use. The decoder does what the js one did — warn
-and skip a single byte — but that desynchronises the rest of that definition,
-which is why 84 objects then fail outright and ~3.5k loc placements are dropped
-without contributing collision. Adding the missing opcodes to the table is the
-fix; the log lists every affected object id and byte offset.
+## Location definition opcodes
+
+The loc opcode table lives in `src/opcodes/objects.jsonc` and is shared with the
+node tooling; the rust decoder in `rust/src/walk/objdef.rs` implements the same
+table with the `buildnr` branches already resolved.
+
+It is worth knowing how this breaks, because it is silent. The stream is
+self-describing: each opcode is followed by operands of a width only the table
+knows. Get one width wrong and every byte after it is misread, so the failure
+shows up as a burst of *unrelated* "unknown opcode" warnings further along —
+not at the opcode that is actually wrong. Three symptoms all trace back to the
+same cause:
+
+* unknown opcodes that are not real opcodes, just misaligned data,
+* definitions that overrun their buffer and are abandoned,
+* loc placements silently contributing no collision, because the definition
+  they need could not be decoded.
+
+Ports of the NXT decoder are the reference for operand widths — the one in
+Hoor2 (`launcher/src/payload/gs_cache_defs.c`, `gs_cache_object_def`) covers the
+modern opcodes. Its primitives map onto this repo's as `big_smart` = `varuint`,
+`unsigned_smart` = `varushort`, `tri_byte` = `unsigned tribyte`.
+
+Fixed in this repo so far: `0xCD` was declared a single byte when it is really a
+nested structure, and `0x6C`-`0x6E` and `0xCE` were missing outright. Together
+those desynced 596 definitions, produced 2236 bogus unknown-opcode warnings, and
+dropped 3487 loc placements out of collision entirely.
 
 # RuneScape Model Viewer (.js)
 A RuneScape cache downloader, decoder and model viewer implemented in TypeScript. The tool will download the cache directly from the game servers and decode parts of into usable data and models. 
