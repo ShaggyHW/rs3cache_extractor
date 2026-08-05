@@ -309,11 +309,15 @@ fn get_lodestones(conn: &Connection) -> Result<(TileSet, Vec<Tile>)> {
     Ok((set, list))
 }
 
-fn get_object_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+/// Links the centre of each node's origin range to the centre of its destination
+/// range, in both directions. Shared by every node table that carries a full
+/// `orig_*` / `dest_*` pair.
+fn get_range_transitions(conn: &Connection, table: &str) -> Result<TileMap<Vec<Tile>>> {
     let mut adj: TileMap<Vec<Tile>> = TileMap::default();
-    let mut stmt = conn.prepare(
-        "SELECT orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_object_nodes",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM {}",
+        table
+    ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let o_min_x: Option<i64> = r.get(0)?;
@@ -352,47 +356,32 @@ fn get_object_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
     Ok(adj)
 }
 
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?1 COLLATE NOCASE",
+            [table],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+fn get_object_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+    get_range_transitions(conn, "teleports_object_nodes")
+}
+
 fn get_npc_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
-    let mut adj: TileMap<Vec<Tile>> = TileMap::default();
-    let mut stmt = conn.prepare(
-        "SELECT orig_min_x, orig_max_x, orig_min_y, orig_max_y, orig_plane, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane FROM teleports_npc_nodes",
-    )?;
-    let mut rows = stmt.query([])?;
-    while let Some(r) = rows.next()? {
-        let o_min_x: Option<i64> = r.get(0)?;
-        let o_max_x: Option<i64> = r.get(1)?;
-        let o_min_y: Option<i64> = r.get(2)?;
-        let o_max_y: Option<i64> = r.get(3)?;
-        let o_plane: Option<i64> = r.get(4)?;
-        let d_min_x: Option<i64> = r.get(5)?;
-        let d_max_x: Option<i64> = r.get(6)?;
-        let d_min_y: Option<i64> = r.get(7)?;
-        let d_max_y: Option<i64> = r.get(8)?;
-        let d_plane: Option<i64> = r.get(9)?;
-        if [o_min_x, o_max_x, o_min_y, o_max_y, o_plane, d_min_x, d_max_x, d_min_y, d_max_y, d_plane]
-            .iter()
-            .any(|v| v.is_none())
-        {
-            continue;
-        }
-        let (o_min_x, o_max_x, o_min_y, o_max_y, o_plane, d_min_x, d_max_x, d_min_y, d_max_y, d_plane) = (
-            o_min_x.unwrap() as i32,
-            o_max_x.unwrap() as i32,
-            o_min_y.unwrap() as i32,
-            o_max_y.unwrap() as i32,
-            o_plane.unwrap() as i32,
-            d_min_x.unwrap() as i32,
-            d_max_x.unwrap() as i32,
-            d_min_y.unwrap() as i32,
-            d_max_y.unwrap() as i32,
-            d_plane.unwrap() as i32,
-        );
-        let origin = center_tile(o_min_x, o_max_x, o_min_y, o_max_y, o_plane);
-        let dest = center_tile(d_min_x, d_max_x, d_min_y, d_max_y, d_plane);
-        adj.entry(origin).or_default().push(dest);
-        adj.entry(dest).or_default().push(origin);
+    get_range_transitions(conn, "teleports_npc_nodes")
+}
+
+/// Use-on nodes were added after some databases were built, so a missing table
+/// means "no such transitions" rather than a corrupt DB.
+fn get_useon_transitions(conn: &Connection) -> Result<TileMap<Vec<Tile>>> {
+    if !table_exists(conn, "teleports_useOn_nodes")? {
+        return Ok(TileMap::default());
     }
-    Ok(adj)
+    get_range_transitions(conn, "teleports_useOn_nodes")
 }
 
 fn get_item_dest_tiles(conn: &Connection) -> Result<Vec<Tile>> {
@@ -493,6 +482,9 @@ fn reachable_tiles(
     println!("Loading NPC transitions...");
     let npc = get_npc_transitions(conn)?;
     println!("Loaded {} NPC transition origins with {} total destinations", npc.len(), npc.values().map(|v| v.len()).sum::<usize>());
+    println!("Loading use-on transitions...");
+    let useon = get_useon_transitions(conn)?;
+    println!("Loaded {} use-on transition origins with {} total destinations", useon.len(), useon.values().map(|v| v.len()).sum::<usize>());
     println!("Loading item teleport destinations...");
     let item_dests = get_item_dest_tiles(conn)?;
     println!("Loaded {} item teleport destinations", item_dests.len());
@@ -512,7 +504,7 @@ fn reachable_tiles(
 
     // Important: seed BFS with teleport endpoints so destination tiles are retained in the cleaned DB
     // even if their origin tiles are not walk-reachable (e.g., one-way walk masks or data issues).
-    println!("Seeding BFS with teleport endpoints (door/lodestone/object/npc)...");
+    println!("Seeding BFS with teleport endpoints (door/lodestone/object/npc/use-on)...");
     for &n in door.values().flatten() {
         if vis.insert(n) { q.push_back(n); }
     }
@@ -523,6 +515,9 @@ fn reachable_tiles(
         if vis.insert(n) { q.push_back(n); }
     }
     for &n in npc.values().flatten() {
+        if vis.insert(n) { q.push_back(n); }
+    }
+    for &n in useon.values().flatten() {
         if vis.insert(n) { q.push_back(n); }
     }
 
@@ -574,6 +569,11 @@ fn reachable_tiles(
             }
         }
         if let Some(v) = npc.get(&t) {
+            for &n in v {
+                if vis.insert(n) { q.push_back(n); }
+            }
+        }
+        if let Some(v) = useon.get(&t) {
             for &n in v {
                 if vis.insert(n) { q.push_back(n); }
             }

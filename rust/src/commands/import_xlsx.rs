@@ -17,6 +17,8 @@ const ALLOWED_NEXT_NODE_TYPES: &[&str] = &[
     "item",
     "fairy_rings",
     "fairy_ring",
+    "useon",
+    "use_on",
 ];
 const ALLOWED_DOOR_DIRECTIONS: &[&str] = &["IN", "OUT"];
 const ALLOWED_REQUIREMENT_COMPARISONS: &[&str] = &["=", "!=", "<", "<=", ">", ">="];
@@ -29,6 +31,7 @@ const TELEPORT_NODE_TABLES: &[&str] = &[
     "teleports_object_nodes",
     "teleports_fairy_rings_nodes",
     "teleports_poa_nodes",
+    "teleports_useon_nodes",
     // include requirements to rebuild edges when requirement_id changes
     "teleports_requirements",
 ];

@@ -238,6 +238,26 @@ CREATE TABLE teleports_POA_nodes (
     requirements TEXT
 );
 
+CREATE TABLE teleports_useOn_nodes (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER,
+    object_id INTEGER,
+    dest_min_x INTEGER,
+    dest_max_x INTEGER,
+    dest_min_y INTEGER,
+    dest_max_y INTEGER,
+    dest_plane INTEGER,
+    orig_min_x INTEGER,
+    orig_max_x INTEGER,
+    orig_min_y INTEGER,
+    orig_max_y INTEGER,
+    orig_plane INTEGER,
+    next_node_type TEXT,
+    next_node_id INTEGER,
+    cost INTEGER,
+    requirements TEXT
+);
+
 CREATE TABLE teleports_requirements (
     id INTEGER PRIMARY KEY,
     metaInfo TEXT,
@@ -303,6 +323,7 @@ CREATE INDEX IF NOT EXISTS idx_tif_req   ON teleports_ifslot_nodes(requirements)
 CREATE INDEX IF NOT EXISTS idx_tlode_req ON teleports_lodestone_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tfairy_req ON teleports_fairy_rings_nodes(requirements);
 CREATE INDEX IF NOT EXISTS idx_tpoa_req ON teleports_POA_nodes(requirements);
+CREATE INDEX IF NOT EXISTS idx_tuseon_req ON teleports_useOn_nodes(requirements);
 
 -- ========== VIEW ==========
 
@@ -337,7 +358,11 @@ WHERE dest_min_x IS NOT NULL
 UNION ALL
 SELECT 'poa', id, NULL, NULL, NULL,
        dest_min_x, dest_min_y, dest_plane, cost, requirements
-FROM teleports_POA_nodes;
+FROM teleports_POA_nodes
+UNION ALL
+SELECT 'useon', id, orig_min_x, orig_min_y, orig_plane,
+       dest_min_x, dest_min_y, dest_plane, cost, requirements
+FROM teleports_useOn_nodes;
 
     "#,
     )?;
