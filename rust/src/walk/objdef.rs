@@ -309,6 +309,39 @@ fn parse_object_inner(buf: &[u8], issues: &mut Vec<OpcodeIssue>) -> Result<RawOb
                 r.skip(2)?; // trailing
             }
             0xde => r.skip(1)?,
+            // 950-1 opcodes, widths from Hoor2 gs_cache_object_def (ops 111 and
+            // 207-209). 207/208 are the wide-id successors of morphs_1/morphs_2:
+            // the varbit grows from a ushort to a tribyte, the rest is unchanged.
+            0x6f => {}
+            0xcf => {
+                r.skip(3 + 2)?;
+                let count = r.varushort()? as usize;
+                let mut first: Option<u32> = None;
+                for i in 0..count {
+                    let v = item_modelid(&mut r)?;
+                    if i == 0 {
+                        first = Some(v);
+                    }
+                }
+                let unk3 = item_modelid(&mut r)?;
+                obj.morphs_1 = Some(first.unwrap_or(unk3));
+            }
+            0xd0 => {
+                r.skip(3 + 2)?;
+                let unk2 = item_modelid(&mut r)?;
+                let count = r.varushort()? as usize;
+                for _ in 0..count {
+                    item_modelid(&mut r)?;
+                }
+                item_modelid(&mut r)?;
+                obj.morphs_2 = Some(unk2);
+            }
+            // Length-prefixed record whose body has no stable width; the prefix
+            // is the only safe way past it.
+            0xd1 => {
+                let size = r.ushort()? as usize;
+                r.skip(size)?;
+            }
             // Opcodes below are absent from src/opcodes/objects.jsonc, which is
             // why the js decoder desynced on them. Widths taken from the NXT
             // decoder in Hoor2 (launcher/src/payload/gs_cache_defs.c,
