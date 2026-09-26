@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::compression::decompress;
 use super::index::{parse_index, unpack_sqlite_archive, CacheIndex, SubFileRange};
@@ -18,9 +18,18 @@ pub const MAJOR_OBJECTS: u32 = 16;
 /// Archive size used to map a flat file id onto (minor, subid) for major 16.
 pub const OBJECTS_PER_ARCHIVE: u32 = 256;
 
+struct Preloaded {
+    blobs: Vec<Option<Box<[u8]>>>,
+    /// Keys the scan could not take (odd keys, NULL data); these still go
+    /// through the per-key query so they fail exactly as before.
+    unreadable: Vec<i64>,
+}
+
 pub struct CacheTable {
     conn: Mutex<Connection>,
     pub index: Vec<Option<CacheIndex>>,
+    /// Every compressed blob, indexed by key, once [`CacheTable::preload`] ran.
+    preloaded: OnceLock<Preloaded>,
 }
 
 impl CacheTable {
@@ -35,7 +44,45 @@ impl CacheTable {
         }
     }
 
+    /// Reads the whole table into memory in one scan, so later lookups never
+    /// touch the file. For the mapsquares that is ~55 MB compressed; holding it
+    /// is what keeps the lookups fast while a large database is being written,
+    /// because under memory pressure the kernel evicts the cache file's pages
+    /// to make room for the output and every lookup then queues behind the
+    /// writes.
+    pub fn preload(&self) -> Result<()> {
+        if self.preloaded.get().is_some() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT KEY, DATA FROM cache")?;
+        let mut rows = stmt.query([])?;
+        let mut blobs: Vec<Option<Box<[u8]>>> = Vec::new();
+        let mut unreadable = Vec::new();
+        while let Some(row) = rows.next()? {
+            let key: i64 = row.get(0)?;
+            let (Ok(ukey), Ok(data)) = (usize::try_from(key), row.get::<_, Vec<u8>>(1)) else {
+                unreadable.push(key);
+                continue;
+            };
+            let key = ukey;
+            if blobs.len() <= key {
+                blobs.resize(key + 1, None);
+            }
+            blobs[key] = Some(data.into_boxed_slice());
+        }
+        let _ = self.preloaded.set(Preloaded { blobs, unreadable });
+        Ok(())
+    }
+
     pub fn file(&self, minor: u32) -> Result<Option<Vec<u8>>> {
+        if let Some(pre) = self.preloaded.get() {
+            match pre.blobs.get(minor as usize) {
+                Some(Some(raw)) => return Ok(Some(decompress(raw)?)),
+                _ if !pre.unreadable.contains(&(minor as i64)) => return Ok(None),
+                _ => {}
+            }
+        }
         match self.raw(minor)? {
             Some(raw) => Ok(Some(decompress(&raw)?)),
             None => Ok(None),
@@ -85,6 +132,7 @@ impl CacheSource {
         if !dbfile.exists() {
             bail!("cache index {} does not exist at {}", major, dbfile.display());
         }
+        prewarm(&dbfile);
         let conn = Connection::open_with_flags(
             &dbfile,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -98,6 +146,20 @@ impl CacheSource {
         let index = parse_index(&indexfile)
             .with_context(|| format!("parsing cache_index of {}", dbfile.display()))?;
 
-        Ok(CacheTable { conn: Mutex::new(conn), index })
+        Ok(CacheTable { conn: Mutex::new(conn), index, preloaded: OnceLock::new() })
+    }
+}
+
+/// Reads a cache file front to back once so the page cache holds it before the
+/// random per-key lookups start. On a cold cache this is one sequential read
+/// instead of thousands of scattered ones, which on a busy disk is the
+/// difference between well under a second and most of a minute; on a warm
+/// cache it costs a few milliseconds. Failures are ignored: sqlite reports any
+/// real problem with the file itself.
+fn prewarm(path: &Path) {
+    use std::io::Read;
+    if let Ok(mut file) = std::fs::File::open(path) {
+        let mut buf = vec![0u8; 4 << 20];
+        while matches!(file.read(&mut buf), Ok(n) if n > 0) {}
     }
 }

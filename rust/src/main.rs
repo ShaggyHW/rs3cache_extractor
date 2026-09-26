@@ -1,11 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-mod cache;
-mod util;
-mod db;
-mod commands;
-mod walk;
+
+use rs3cache_extractor::{commands, util};
 
 #[derive(Parser, Debug)]
 #[command(name = "rs3cache_extractor", version, about = "Tools for RS3 cache extraction")] 
@@ -87,14 +84,53 @@ enum Commands {
         /// Report problems on the console only, without writing a log file
         #[arg(long)]
         no_log_file: bool,
+        /// Wait until the db has reached the disk before exiting. Without it the
+        /// kernel finishes writing it back in the background.
+        #[arg(long)]
+        fsync: bool,
+        #[command(flatten)]
+        area: AreaArgs,
+    },
+
+    /// The whole pipeline in one run: walkflags --db + import-xlsx + tile-cleaner,
+    /// overlapped, writing only the pages of tiles.db / worldReachableTiles.db that changed
+    Build {
+        /// NXT cache directory containing the js5-*.jcache files
+        #[arg(long, short = 'o')]
+        cache: PathBuf,
+        /// tiles.db to create or update in place (default: repo_root/tiles.db)
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Reachable-tiles db to create or update in place (default: repo_root/worldReachableTiles.db)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Overrides file with lines: x,y,plane,walk_mask
+        #[arg(long)]
+        overrides: Option<PathBuf>,
+        /// Spreadsheet to import: .xlsx path or Google Sheets URL
+        #[arg(long)]
+        xlsx: Option<String>,
+        /// BFS start tile X
+        #[arg(long, default_value_t = 3200)]
+        start_x: i32,
+        /// BFS start tile Y
+        #[arg(long, default_value_t = 3200)]
+        start_y: i32,
+        /// BFS start plane
         #[arg(long, default_value_t = 0)]
-        startx: i32,
-        #[arg(long, default_value_t = 0)]
-        startz: i32,
-        #[arg(long, default_value_t = 128)]
-        sizex: i32,
-        #[arg(long, default_value_t = 200)]
-        sizez: i32,
+        start_plane: i32,
+        /// Full diagnostics log; problems also go to the console
+        #[arg(long, default_value = "walkflags.log")]
+        log: PathBuf,
+        /// Report problems on the console only, without writing a log file
+        #[arg(long)]
+        no_log_file: bool,
+        /// Wait until both dbs have reached the disk before exiting. Without it
+        /// the kernel finishes writing them back in the background.
+        #[arg(long)]
+        fsync: bool,
+        #[command(flatten)]
+        area: AreaArgs,
     },
 
     /// Hex dump one location definition's raw opcode stream, for debugging the decoder
@@ -105,6 +141,29 @@ enum Commands {
         /// Location definition id
         id: u32,
     },
+}
+
+/// Which mapsquares to extract; the defaults cover the whole world.
+#[derive(clap::Args, Debug)]
+struct AreaArgs {
+    /// First mapsquare column
+    #[arg(long, default_value_t = 0)]
+    startx: i32,
+    /// First mapsquare row
+    #[arg(long, default_value_t = 0)]
+    startz: i32,
+    /// Number of mapsquare columns
+    #[arg(long, default_value_t = 128)]
+    sizex: i32,
+    /// Number of mapsquare rows
+    #[arg(long, default_value_t = 200)]
+    sizez: i32,
+}
+
+impl From<AreaArgs> for commands::walkflags::Area {
+    fn from(a: AreaArgs) -> Self {
+        commands::walkflags::Area { startx: a.startx, startz: a.startz, sizex: a.sizex, sizez: a.sizez }
+    }
 }
 
 fn main() -> Result<()> {
@@ -125,20 +184,35 @@ fn main() -> Result<()> {
             let out_path = out.unwrap_or(root.join("worldReachableTiles.db"));
             commands::tile_cleaner::cmd_tile_cleaner(&src_path, &out_path, start_x, start_y, start_plane)
         }
-        Commands::Walkflags { cache, save, db, overrides, log, no_log_file, startx, startz, sizex, sizez } => {
+        Commands::Walkflags { cache, save, db, overrides, log, no_log_file, fsync, area } => {
             commands::walkflags::cmd_walkflags(&commands::walkflags::WalkflagsOpts {
                 cache_dir: &cache,
                 save_dir: save.as_deref(),
                 db: db.as_deref(),
                 overrides: overrides.as_deref(),
                 log: if no_log_file { None } else { Some(&log) },
-                startx,
-                startz,
-                sizex,
-                sizez,
+                fsync,
+                area: area.into(),
+            })
+        }
+        Commands::Build {
+            cache, db, out, overrides, xlsx, start_x, start_y, start_plane, log, no_log_file, fsync, area,
+        } => {
+            let root = util::repo_root();
+            let db = db.unwrap_or(root.join("tiles.db"));
+            let out = out.unwrap_or(root.join("worldReachableTiles.db"));
+            commands::build::cmd_build(&commands::build::BuildOpts {
+                cache_dir: &cache,
+                db: &db,
+                out: &out,
+                overrides: overrides.as_deref(),
+                xlsx: xlsx.as_deref(),
+                start: (start_x, start_y, start_plane),
+                log: if no_log_file { None } else { Some(&log) },
+                fsync,
+                area: area.into(),
             })
         }
         Commands::DumpObject { cache, id } => commands::walkflags::cmd_dump_object(&cache, id),
     }
 }
-// (All DB schema and loading logic is now in `db` and `commands` modules.)

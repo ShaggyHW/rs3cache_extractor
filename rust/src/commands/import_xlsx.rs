@@ -22,20 +22,6 @@ const ALLOWED_NEXT_NODE_TYPES: &[&str] = &[
 ];
 const ALLOWED_DOOR_DIRECTIONS: &[&str] = &["IN", "OUT"];
 const ALLOWED_REQUIREMENT_COMPARISONS: &[&str] = &["=", "!=", "<", "<=", ">", ">="];
-const TELEPORT_NODE_TABLES: &[&str] = &[
-    "teleports_door_nodes",
-    "teleports_ifslot_nodes",
-    "teleports_item_nodes",
-    "teleports_lodestone_nodes",
-    "teleports_npc_nodes",
-    "teleports_object_nodes",
-    "teleports_fairy_rings_nodes",
-    "teleports_poa_nodes",
-    "teleports_useon_nodes",
-    // include requirements to rebuild edges when requirement_id changes
-    "teleports_requirements",
-];
-
 fn normalize_requirements_value(v: &str) -> Result<String> {
     let trimmed = v.trim();
     if trimmed.is_empty() {
@@ -117,36 +103,100 @@ struct Table {
     columns: HashMap<String, Column>, // lowercased key -> Column
 }
 
+/// One worksheet's rows, ready to execute against a table.
+struct PlannedSheet {
+    sheet: String,
+    table: String,
+    statements: Vec<(String, Vec<rusqlite::types::Value>)>,
+}
+
+/// A parsed workbook: what [`apply_plan`] will do to a database. Parsing is
+/// separate so one workbook can be applied to several copies of the schema.
+pub struct ImportPlan {
+    truncate: Vec<String>,
+    sheets: Vec<PlannedSheet>,
+    /// Lowercased names of every table the plan inserts into or truncates.
+    pub tables_touched: HashSet<String>,
+}
+
+impl ImportPlan {
+    pub fn rows(&self) -> usize {
+        self.sheets.iter().map(|s| s.statements.len()).sum()
+    }
+}
+
 pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String], sheets: &[String]) -> Result<()> {
     if !db.exists() {
         bail!("SQLite DB not found: {}", db.display());
     }
 
-    // Obtain local XLSX path, downloading if Google Sheets URL.
-    let (xlsx_path, cleanup_temp): (PathBuf, bool) = if is_google_sheets_url(xlsx) {
+    let workbook = fetch_workbook(xlsx)?;
+
+    let mut conn = Connection::open(db).with_context(|| format!("Open DB {}", db.display()))?;
+    // The databases this imports into are regenerated from the cache, and a
+    // freshly built tiles.db can still have a gigabyte waiting for writeback,
+    // which an fsync at commit would have to sit through.
+    conn.execute_batch("PRAGMA foreign_keys=ON;\nPRAGMA synchronous=OFF;")?;
+
+    let plan = plan_import(&conn, workbook.path(), truncate, sheets)?;
+    if dry_run {
+        for sheet in &plan.sheets {
+            for (sql, params) in sheet.statements.iter().take(5) {
+                println!("  SQL: {}\n  Params: {:?}", sql, params);
+            }
+        }
+        println!("Dry-run complete. Rows that would be inserted: {}", plan.rows());
+    } else {
+        let rows = apply_plan(&mut conn, &plan)?;
+        println!("Import complete. Rows inserted: {}", rows);
+    }
+    Ok(())
+}
+
+/// A workbook on local disk; downloaded ones are deleted when dropped.
+pub struct Workbook {
+    path: PathBuf,
+    temporary: bool,
+}
+
+impl Workbook {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Workbook {
+    fn drop(&mut self) {
+        if self.temporary {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Resolves `xlsx` to a local file, downloading it if it is a Google Sheets URL.
+pub fn fetch_workbook(xlsx: &str) -> Result<Workbook> {
+    if is_google_sheets_url(xlsx) {
         println!("Downloading Google Sheet as .xlsx ...");
-        (download_google_sheet_as_xlsx(xlsx)?, true)
+        Ok(Workbook { path: download_google_sheet_as_xlsx(xlsx)?, temporary: true })
     } else {
         let p = PathBuf::from(xlsx);
         if !p.exists() {
             bail!("XLSX file not found: {}", p.display());
         }
-        (p, false)
-    };
+        Ok(Workbook { path: p, temporary: false })
+    }
+}
 
-    let mut conn = Connection::open(db).with_context(|| format!("Open DB {}", db.display()))?;
-    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-
-    // Introspect tables outside the transaction for simple typing
-    let tables = fetch_existing_tables(&conn)?;
-    let mut tx = conn.transaction()?;
+/// Reads and validates the workbook against the tables in `conn`.
+pub fn plan_import(conn: &Connection, xlsx_path: &Path, truncate: &[String], sheets: &[String]) -> Result<ImportPlan> {
+    let tables = fetch_existing_tables(conn)?;
     let truncate_set: HashSet<String> = truncate.iter().map(|s| s.to_lowercase()).collect();
     let only_set: Option<HashSet<String>> = if sheets.is_empty() {
         None
     } else {
         Some(sheets.iter().map(|s| s.to_lowercase()).collect())
     };
-    let mut teleports_touched = false;
+    let mut tables_touched = HashSet::new();
 
     // Validate requested truncations and sheets
     for t in &truncate_set {
@@ -162,20 +212,14 @@ pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String]
         }
     }
 
-    // Truncate if requested
+    let mut truncate_tables: Vec<String> = Vec::new();
     for tkey in &truncate_set {
-        let t = &tables[tkey];
-        println!("Truncating table: {}", t.name);
-        if !dry_run {
-            tx.execute(&format!("DELETE FROM {}", t.name), [])?;
-        }
-        if TELEPORT_NODE_TABLES.contains(&t.name.to_ascii_lowercase().as_str()) {
-            teleports_touched = true;
-        }
+        truncate_tables.push(tables[tkey].name.clone());
+        tables_touched.insert(tkey.clone());
     }
 
     // Open workbook
-    let mut wb = open_workbook_auto(&xlsx_path)
+    let mut wb = open_workbook_auto(xlsx_path)
         .with_context(|| format!("Open workbook {}", xlsx_path.display()))?;
 
     // Sheet order: process 'requirements' first
@@ -186,7 +230,7 @@ pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String]
         .collect();
     sheet_names.sort_by_key(|n| if n.eq_ignore_ascii_case("requirements") { 0 } else { 1 });
 
-    let mut total_inserted: usize = 0;
+    let mut planned = Vec::new();
     for sheet in sheet_names {
         let sheet_key = sheet.to_lowercase();
         if let Some(only) = &only_set {
@@ -200,73 +244,47 @@ pub fn cmd_import_xlsx(xlsx: &str, db: &Path, dry_run: bool, truncate: &[String]
         };
 
         if let Some(Ok(range)) = wb.worksheet_range(&sheet) {
-            println!("Processing worksheet '{}' -> table '{}'", sheet, table.name);
             let rows = read_worksheet(&range, table)?;
-            println!("  Prepared {} row(s)", rows.len());
-            let mut sheet_preview = 0usize;
-            if TELEPORT_NODE_TABLES.contains(&table.name.to_ascii_lowercase().as_str()) {
-                teleports_touched = true;
-            }
+            let mut statements = Vec::with_capacity(rows.len());
             for mut r in rows {
                 normalize_specials(&table.name, &mut r)?;
                 validate_specials(&table.name, &r)?;
-                let (sql, params) = build_insert_sql(table, &r)?;
-                if dry_run {
-                    if sheet_preview < 5 {
-                        println!("  SQL: {}\n  Params: {:?}", sql, params);
-                        sheet_preview += 1;
-                    }
-                } else {
-                    tx.execute(&sql, params_from_iter(params))?;
-                }
-                total_inserted += 1;
+                statements.push(build_insert_sql(table, &r)?);
             }
+            tables_touched.insert(table.name.to_lowercase());
+            planned.push(PlannedSheet { sheet, table: table.name.clone(), statements });
         } else {
             println!("Skipping worksheet '{}' (unable to read range)", sheet);
         }
     }
 
-    // If any teleport-related tables were touched (truncated or inserted), rebuild abstract_teleport_edges
-    // if teleports_touched {
-    //     if dry_run {
-    //         println!(
-    //             "Dry-run: would rebuild abstract_teleport_edges from teleports_all (DELETE + INSERT)."
-    //         );
-    //     } else {
-    //         println!("Rebuilding abstract_teleport_edges from teleports_all ...");
-    //         tx.execute_batch(
-    //             r#"
-    //             DELETE FROM abstract_teleport_edges;
-    //             INSERT INTO abstract_teleport_edges (
-    //               kind, node_id,
-    //               src_x, src_y, src_plane,
-    //               dst_x, dst_y, dst_plane,
-    //               cost, requirement_id
-    //             )
-    //             SELECT kind, id,
-    //                    src_x, src_y, src_plane,
-    //                    dst_x, dst_y, dst_plane,
-    //                    cost, requirement_id
-    //             FROM teleports_all;
-    //             "#,
-    //         )?;
-    //     }
-    // }
+    Ok(ImportPlan { truncate: truncate_tables, sheets: planned, tables_touched })
+}
 
-    if dry_run {
-        println!("Dry-run complete. Rows that would be inserted: {}", total_inserted);
-        // Drop transaction without commit -> rollback
-    } else {
-        tx.commit()?;
-        println!("Import complete. Rows inserted: {}", total_inserted);
+/// Runs a plan in one transaction and returns the number of rows inserted.
+pub fn apply_plan(conn: &mut Connection, plan: &ImportPlan) -> Result<usize> {
+    let tx = conn.transaction()?;
+    for table in &plan.truncate {
+        println!("Truncating table: {}", table);
+        tx.execute(&format!("DELETE FROM {}", table), [])?;
     }
-
-    // Cleanup temp file if downloaded
-    if cleanup_temp {
-        let _ = fs::remove_file(&xlsx_path);
+    let mut total = 0usize;
+    for sheet in &plan.sheets {
+        println!(
+            "Processing worksheet '{}' -> table '{}': {} row(s)",
+            sheet.sheet,
+            sheet.table,
+            sheet.statements.len()
+        );
+        for (sql, params) in &sheet.statements {
+            // Rows of one sheet mostly share a column set, so the statement
+            // cache turns this into a handful of prepares.
+            tx.prepare_cached(sql)?.execute(params_from_iter(params.iter()))?;
+            total += 1;
+        }
     }
-
-    Ok(())
+    tx.commit()?;
+    Ok(total)
 }
 
 fn is_google_sheets_url(s: &str) -> bool {

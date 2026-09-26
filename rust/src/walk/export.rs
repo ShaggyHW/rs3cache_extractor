@@ -105,42 +105,43 @@ fn for_each_tile(grid: &Grid, chunkx: i32, chunkz: i32, mut f: impl FnMut(i32, i
     }
 }
 
-/// One `tiles` row, with the primary key packed so a column's worth of rows can
-/// be sorted into `(x, y, plane)` order cheaply.
-#[derive(Clone, Copy)]
-pub struct TileRow {
-    pub key: u64,
-    pub walk_mask: u8,
+/// Tiles per mapsquare: `SQUARE_LEVELS` levels of `CHUNK_SIZE` x `CHUNK_SIZE`.
+pub const SQUARE_TILES: usize = SQUARE_LEVELS * (CHUNK_SIZE * CHUNK_SIZE) as usize;
+
+/// Index of a tile in a [`collect_masks`] array.
+#[inline]
+pub fn mask_index(plane: usize, lx: usize, lz: usize) -> usize {
+    plane * (CHUNK_SIZE * CHUNK_SIZE) as usize + lz * CHUNK_SIZE as usize + lx
 }
 
-impl TileRow {
-    #[inline]
-    pub fn x(&self) -> i64 {
-        (self.key >> 32) as i64
+/// The `walkMask` of every tile of one mapsquare, which is all `tiles.db`
+/// keeps of it, indexed by [`mask_index`]. Tiles that do not exist are listed
+/// in `missing` (ascending); a mapsquare normally contributes all of its tiles.
+pub fn collect_masks(
+    grid: &Grid,
+    chunkx: i32,
+    chunkz: i32,
+    masks: &mut [u8; SQUARE_TILES],
+    missing: &mut Vec<u16>,
+) {
+    let rectx = chunkx * CHUNK_SIZE;
+    let rectz = chunkz * CHUNK_SIZE;
+    for plane in 0..SQUARE_LEVELS {
+        for dz in 0..CHUNK_SIZE {
+            for dx in 0..CHUNK_SIZE {
+                let idx = mask_index(plane, dx as usize, dz as usize);
+                match tile_flags(grid, rectx + dx, rectz + dz, plane as i32) {
+                    Some(flags) => masks[idx] = flags.allowed_mask,
+                    None => {
+                        masks[idx] = 0;
+                        missing.push(idx as u16);
+                    }
+                }
+            }
+        }
     }
-    #[inline]
-    pub fn y(&self) -> i64 {
-        ((self.key >> 8) & 0xff_ffff) as i64
-    }
-    #[inline]
-    pub fn plane(&self) -> i64 {
-        (self.key & 0xff) as i64
-    }
-    /// `regionId = (regionX << 8) + regionY`, matching `load-tiles`.
-    #[inline]
-    pub fn region_id(&self) -> i64 {
-        ((self.x() >> 6) << 8) + (self.y() >> 6)
-    }
-}
-
-/// Collects the rows `load-tiles` would have derived from this mapsquare's json.
-pub fn collect_rows(grid: &Grid, chunkx: i32, chunkz: i32, out: &mut Vec<TileRow>) {
-    for_each_tile(grid, chunkx, chunkz, |gx, gz, plane, flags| {
-        out.push(TileRow {
-            key: ((gx as u64) << 32) | ((gz as u64) << 8) | plane as u64,
-            walk_mask: flags.allowed_mask,
-        });
-    });
+    // The loop visits indices in ascending order already.
+    debug_assert!(missing.windows(2).all(|w| w[0] < w[1]));
 }
 
 #[inline]

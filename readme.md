@@ -1,16 +1,38 @@
 # TILE DATA EXTRACTION
 
+One command builds everything: `tiles.db` from the cache, the spreadsheet's
+teleports imported into it, and `worldReachableTiles.db`:
+
 ```sh
-cargo run --release --manifest-path rust/Cargo.toml -- walkflags -o /home/query/.local/share/bolt-launcher/Jagex/RuneScape/ --db tiles.db --overrides override.txt --startx 0 --startz 0
-
-cargo run --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo' --db tiles.db
-cargo run --manifest-path rust/Cargo.toml -- tile-cleaner
-
+cargo run --release --manifest-path rust/Cargo.toml -- build -o /home/query/.local/share/bolt-launcher/Jagex/RuneScape/ --overrides override.txt --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo'
 
 walk_mask_decode.py --encode left
-
-
 ```
+
+`build` writes `tiles.db` and `worldReachableTiles.db` in the repo root (`--db`
+and `--out` to move them). It produces exactly what the three separate steps
+below produce, and those still work on their own:
+
+```sh
+cargo run --release --manifest-path rust/Cargo.toml -- walkflags -o /home/query/.local/share/bolt-launcher/Jagex/RuneScape/ --db tiles.db --overrides override.txt
+cargo run --release --manifest-path rust/Cargo.toml -- import-xlsx --xlsx 'https://docs.google.com/spreadsheets/d/1gp1fePtecvpU1u-WhZk-uKm-wLiDcYB0LkmtaKOiPwo' --db tiles.db
+cargo run --release --manifest-path rust/Cargo.toml -- tile-cleaner
+```
+
+Neither database has to be deleted first: an existing one is updated in place
+(see [Rebuilding in place](#rebuilding-in-place)). Do not run a build while
+another program has either database open.
+
+| `build` flag | |
+|---|---|
+| `-o, --cache <dir>` | NXT cache directory holding the `js5-*.jcache` files |
+| `--db <path>` | tiles db to create or update, default `tiles.db` |
+| `--out <path>` | reachable-tiles db to create or update, default `worldReachableTiles.db` |
+| `--overrides <path>` | `x,y,plane,walk_mask` lines; a later line for the same tile wins |
+| `--xlsx <url or path>` | spreadsheet to import; without it the teleport tables stay empty |
+| `--start-x/--start-y/--start-plane` | BFS start tile, default 3200, 3200, 0 |
+| `--fsync` | wait until both dbs are on disk before exiting |
+| `--log`, `--no-log-file`, `--startx/--startz/--sizex/--sizez` | as for `walkflags` |
 
 `walkflags` is a port of the old `node dist/cli walkflags` script. It reads the
 NXT sqlite cache directly and, with `--db`, writes tiles straight into
@@ -26,17 +48,17 @@ cargo run --manifest-path rust/Cargo.toml -- load-tiles --json-dir out/walk --db
 `-s <dir>` still writes the old `<dir>/walk/<x>-<z>.json` files, byte for byte
 identical to the node version's output apart from the collision the opcode fixes
 below restored; it is useful for diffing but the json only ever contributed one
-column (`walkMask`) to the database. `-s` and `--db` can be combined, and `--db`
-needs a database that does not exist yet.
+column (`walkMask`) to the database. `-s` and `--db` can be combined.
 
-| flag | |
+| `walkflags` flag | |
 |---|---|
 | `-o, --cache <dir>` | NXT cache directory holding the `js5-*.jcache` files |
-| `--db <path>` | write tiles straight into this sqlite db; must not exist yet |
+| `--db <path>` | write tiles straight into this sqlite db; a new file, or an existing `tiles.db` to update in place |
 | `-s, --save <dir>` | write `<dir>/walk/<x>-<z>.json`, as the node script did |
-| `--overrides <path>` | `x,y,plane,walk_mask` lines applied last; needs `--db` |
+| `--overrides <path>` | `x,y,plane,walk_mask` lines; needs `--db` |
 | `--log <path>` | full diagnostics log, default `walkflags.log` |
 | `--no-log-file` | report problems on the console only |
+| `--fsync` | wait until the db is on disk before exiting |
 | `--startx/--startz` | first mapsquare column/row, default 0 |
 | `--sizex/--sizez` | how many to cover, default 128 x 200 (the whole world) |
 
@@ -45,67 +67,84 @@ At least one of `--db` and `-s` is required. There is also
 
 ## Performance
 
-A full world extraction is **~50s on a spinning disk, ~13s on fast storage**, and
-essentially all of it is writing the database. Every run prints where its time
-went:
+Measured on the development machine (32 threads, a SATA SSD that is 89% full and
+also holds the swap, so its sustained write speed swings between ~30 and ~300
+MB/s):
+
+| | before | `build` |
+|---|---|---|
+| everything unchanged since the last build | ~62s | **1.1–2.7s** |
+| after editing `override.txt` or the spreadsheet | ~62s | **1.1–2.7s** |
+| first build, no databases yet | ~62s | 5–40s, the time the disk takes to write 1.44 GB |
+
+The spread in the first two rows is the Google Sheets export, which takes 0.9–2.5s
+by itself; it runs alongside the ~1s extraction, so whichever is slower sets the
+time (with a local `.xlsx` it is 1.1–1.3s).
+
+"Before" is `walkflags` (~53s, nearly all of it writing 1.6 GB) + `import-xlsx`
+(~2s, the download) + `tile-cleaner` (~7s). Run on their own, the three commands
+now take ~1s (in place) or the disk's time for 1.44 GB (fresh), the download,
+and ~0.8s.
+
+Where it comes from:
+
+* **Nothing goes through sqlite's insert path.** `rust/src/sqlite_btree.rs`
+  writes the `tiles` b-tree pages itself: rows are produced in primary key order,
+  packed into full 16 KB leaves and written as whole pages, with the schema still
+  created by sqlite. This removes a b-tree descent and a VDBE program per row, and
+  because sqlite's page splits left every leaf ~12% empty, the file shrinks from
+  1.65 GB to 1.44 GB. The row sort is gone as well: walking each column's mapsquares
+  x-major yields the rows already in key order.
+* **Rebuilding in place.** An existing database is compared page by page and only
+  pages whose bytes changed are written; see below. Writing is the only slow part
+  on this disk, and a typical rebuild writes a few hundred KB.
+* **Everything overlaps.** `build` downloads the spreadsheet while the cache is
+  decoded, keeps the walk masks it extracts in memory so the reachability BFS
+  never reads 84.75M rows back out of `tiles.db`, and builds
+  `worldReachableTiles.db` from an in-memory copy of the teleports while
+  `tiles.db` is still being written. Columns are encoded and cut into pages on a
+  separate thread pool, several at once.
+* **The mapsquares are read into memory in one scan.** Looking them up one by one
+  while a gigabyte is being written used to take up to 50s on a cold cache,
+  because under memory pressure the kernel evicted the cache file to make room
+  for the output and every lookup then queued behind the writes.
+* **`tile-cleaner` on its own** loads the masks from `tiles.db` with 32 parallel
+  range scans (~0.65s) instead of millions of point queries, and runs the BFS
+  without any sql.
+* **No fsync by default.** The databases are regenerable, so the run ends once
+  the data is handed to the kernel, which writes it back in the background.
+  `--fsync` waits for the disk; `import-xlsx` likewise commits with
+  `synchronous=OFF`.
+
+Every run says where its time went:
 
 ```
-phases: square load 0.4s, chunk work 0.3s, sort 1.8s, db write+flush 56.0s
-  tail: overrides 0.00s, pragmas 0.00s, close 0.03s, flush 43.8s (38 MB/s)
+extracted 84754432 tiles from 5173 squares in 1.0s (square load 0.3s, chunk work 0.4s, waiting on the tiles.db writer 0.1s)
+tiles.db: 84754432 tiles, 88018 leaf + 114 interior pages (depth 3), 1.44 GB; 22 of 88155 pages changed, 0.4 MB written (compare 0.6s, write 0.0s)
 ```
 
-* **square load** — sqlite reads + inflate for the mapsquares of one column and
-  its neighbours. Cheap once the `js5-*.jcache` files are in the page cache.
-* **chunk work** — decoding tiles and locs, building the grid, and deriving every
-  walk mask. This is the actual extraction, and it is **~0.3s for all 84.75M
-  tiles**; it is not worth optimising further.
-* **sort** — ordering each column by `(x, y, plane)`.
-* **db write+flush** — time the main loop spent blocked on the writer thread,
-  plus the final drain and fsync.
+### Rebuilding in place
 
-Three things make it as fast as it is:
+The page layout is a pure function of the rows, so rebuilding from the same input
+reproduces the same bytes. `--db` (and `build`'s `--out`) may therefore point at
+an existing database: the new pages are compared with the ones on disk in
+parallel, only differing runs are written, and the file is truncated to the new
+size. The result is byte for byte what a fresh build writes. A `--db` that holds
+some other database (a different schema) is refused rather than overwritten.
 
-* **Batched inserts.** Rows go in 256 at a time through one multi-row statement
-  with raw parameter binding. One statement per row costs a VDBE invocation each
-  and used to be 81% of the entire runtime.
-* **Bulk-load pragmas.** `page_size=16384` (set before the first table exists),
-  `journal_mode=OFF`, `synchronous=OFF`. The database is built from scratch every
-  run and is regenerable in under a minute, so there is nothing to recover to.
-  Both are restored to `DELETE`/`FULL` before the file is handed back.
-* **A streaming writer thread.** sqlite runs on its own thread behind a bounded
-  channel, so decoding and collision for column N+1 overlap the insert of column
-  N. The bound is two columns, so a slow disk applies backpressure instead of
-  letting decoded columns pile up in memory. Columns are still handed over in
-  ascending x, which is what keeps the primary key writes sequential and is the
-  whole reason each column is sorted first.
+For this to stay local, every mapsquare column starts a new leaf. Without that, a
+tile whose record changes size (an override flipping a mask from 255 to 0 saves
+two bytes) would move every leaf boundary after it and turn a one-page change
+into a rewrite of the rest of the file. With it, a change only repacks its own
+column, and the 128 partly filled leaves cost ~1 MB.
 
-### Why the end of the run looks stuck
-
-`--overrides` is applied after the tiles are in, and the `Applying overrides...`
-line is the last thing printed before the final flush. It is **not** slow — all
-70 upserts measure `0.00s`. What follows it is pushing ~1.6 GB of page cache to
-disk, which is why the flush now announces itself and reports its throughput.
-
-That flush is the floor, not overhead to be tuned away. `dd conv=fsync` writes
-the same 1.6 GB to this disk in 53.9s (32 MB/s); the whole extraction finishes in
-~50s because kernel writeback already overlaps the decoding. **Everything except
-the disk is ~2.5s.**
-
-### The one lever left
-
-Going faster means writing less. The `tiles` table spends ~19 bytes per row to
-carry one byte of payload, and `RegionID` is pure derivation from `x`/`y`.
-navpathService's `tiles_regions` layout — one row per (region, plane) holding a
-512-byte presence bitmap plus 4096 walk masks — is **20,692 rows / ~95 MB instead
-of 84.75M rows / 1.6 GB**, so ~3s of flushing and a ~5s total run. It already
-reads that format (`rust/navpath-builder/src/build/load_sqlite.rs`) and warns and
-falls back to a slow row scan without it.
-
-It is not additive: emitting it *alongside* `tiles` writes more, not less, so the
-win needs it to replace the per-tile table — which means reworking
-`tile_cleaner`, whose BFS does per-tile `SELECT ... WHERE x=? AND y=? AND
-plane=?`. A cheaper partial step is dropping the derivable `RegionID` column,
-worth roughly 250 MB.
+The page writer writes ordinary sqlite databases: sqlite reads, updates and
+integrity-checks them like any other (the import after the tree is plain sqlite,
+as are the tests that modify written trees). Two format rules it has to respect
+and that are easy to miss: a `WITHOUT ROWID` table is a B-tree rather than a
+B+tree, so the rows separating two leaves live in the interior pages rather than
+in either leaf; and the page holding file offset 1 GiB (page 65537 at 16 KB
+pages) is sqlite's lock-byte page, which must stay empty.
 
 ## The tiles table
 
@@ -116,13 +155,15 @@ choices there are load-bearing and easy to undo by accident:
   (rowid) b-tree would roughly double both the write cost and the file size.
   Every consumer looks tiles up by `(x, y, plane)` or scans the table; nothing
   uses `rowid`. Reverting this costs ~2.9x the file size and most of the runtime.
+  The page writer also depends on it: it only fills `WITHOUT ROWID` tables.
 * There is **no `idx_tiles_walkable`**. It was an exact duplicate of the primary
   key, which *is* the table now, so it cost a ~118s rebuild and ~1.9 GB for
   nothing.
 
 `tile_cleaner` copies table and index DDL verbatim from its source database, so
 both properties propagate into `worldReachableTiles.db` with no code change
-there.
+there. (If a spreadsheet ever gets a sheet named `tiles`, `build` notices that
+the import changes the table and reloads the masks from `tiles.db` before the BFS.)
 
 ## Decode diagnostics
 

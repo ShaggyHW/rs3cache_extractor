@@ -57,20 +57,15 @@ pub fn cmd_load_tiles(json_folder: &Path, db_path: &Path, overrides_path: Option
     Ok(())
 }
 
-pub fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
+/// Parses an overrides file: one `x,y,plane,walk_mask` line per tile, blank
+/// lines ignored, in file order (a later line for the same tile wins).
+pub fn read_overrides_file(path: &Path) -> Result<Vec<[i64; 4]>> {
     if !path.exists() {
         anyhow::bail!("Overrides file not found: {}", path.display());
     }
-
-    println!("Applying overrides from {}...", path.display());
     let file = File::open(path).with_context(|| format!("open overrides file {}", path.display()))?;
     let reader = BufReader::new(file);
-
-    let tx = conn.transaction()?;
-    let mut stmt = tx.prepare(
-        "INSERT INTO tiles (x, y, plane, walk_mask, RegionID) VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(x, y, plane) DO UPDATE SET walk_mask=excluded.walk_mask, RegionID=excluded.RegionID",
-    )?;
+    let mut out = Vec::new();
 
     for (idx, line_res) in reader.lines().enumerate() {
         let line_no = idx + 1;
@@ -93,12 +88,28 @@ pub fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
         let y: i64 = parts[1].parse().with_context(|| format!("parse y on line {}", line_no))?;
         let plane: i64 = parts[2].parse().with_context(|| format!("parse z on line {}", line_no))?;
         let walk_mask: i64 = parts[3].parse().with_context(|| format!("parse walk_mask on line {}", line_no))?;
+        out.push([x, y, plane, walk_mask]);
+    }
+    Ok(out)
+}
 
-        let region_x = x >> 6;
-        let region_y = y >> 6;
-        let region_id = (region_x << 8) + region_y;
+/// `regionId = (regionX << 8) + regionY` with `regionX = x >> 6`, `regionY = y >> 6`.
+#[inline]
+pub fn region_id(x: i64, y: i64) -> i64 {
+    ((x >> 6) << 8) + (y >> 6)
+}
 
-        stmt.execute(rusqlite::params![x, y, plane, walk_mask, region_id])?;
+pub fn apply_overrides_file(path: &Path, conn: &mut Connection) -> Result<()> {
+    let overrides = read_overrides_file(path)?;
+    println!("Applying overrides from {}...", path.display());
+
+    let tx = conn.transaction()?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO tiles (x, y, plane, walk_mask, RegionID) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(x, y, plane) DO UPDATE SET walk_mask=excluded.walk_mask, RegionID=excluded.RegionID",
+    )?;
+    for [x, y, plane, walk_mask] in overrides {
+        stmt.execute(rusqlite::params![x, y, plane, walk_mask, region_id(x, y)])?;
     }
 
     drop(stmt);
@@ -200,18 +211,7 @@ fn parse_file_and_stream(path: &Path, sender: &mpsc::Sender<FileBatch>) -> Resul
     const SUB_BATCH: usize = 1_000_000;
     let mut rows: Vec<TileRow> = Vec::with_capacity(SUB_BATCH);
     for t in data.tiles.into_iter() {
-        // Compute RegionID from x,y: regionId = (regionX << 8) + regionY,
-        // where regionX = x >> 6 and regionY = y >> 6
-        let region_x = t.x >> 6;
-        let region_y = t.y >> 6;
-        let region_id = (region_x << 8) + region_y;
-        rows.push((
-            t.x,
-            t.y,
-            t.plane,
-            t.walk_mask,
-            region_id,
-        ));
+        rows.push((t.x, t.y, t.plane, t.walk_mask, region_id(t.x, t.y)));
         if rows.len() >= SUB_BATCH {
             sender.send(FileBatch {
                 tile_rows: std::mem::take(&mut rows),
