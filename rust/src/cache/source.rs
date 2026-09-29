@@ -19,7 +19,8 @@ pub const MAJOR_OBJECTS: u32 = 16;
 pub const OBJECTS_PER_ARCHIVE: u32 = 256;
 
 struct Preloaded {
-    blobs: Vec<Option<Box<[u8]>>>,
+    /// Compressed blob and the `VERSION` column, indexed by key.
+    blobs: Vec<Option<(Box<[u8]>, u32)>>,
     /// Keys the scan could not take (odd keys, NULL data); these still go
     /// through the per-key query so they fail exactly as before.
     unreadable: Vec<i64>,
@@ -33,14 +34,38 @@ pub struct CacheTable {
 }
 
 impl CacheTable {
-    /// Raw (still compressed) blob for a minor id.
-    pub fn raw(&self, minor: u32) -> Result<Option<Vec<u8>>> {
+    /// Raw (still compressed) blob for a minor id, with its stored version.
+    pub fn raw(&self, minor: u32) -> Result<Option<(Vec<u8>, u32)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare_cached("SELECT DATA FROM cache WHERE KEY=?1")?;
+        let mut stmt = conn.prepare_cached("SELECT DATA, VERSION FROM cache WHERE KEY=?1")?;
         let mut rows = stmt.query([minor])?;
         match rows.next()? {
-            Some(row) => Ok(Some(row.get::<_, Vec<u8>>(0)?)),
+            Some(row) => Ok(Some((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)? as u32))),
             None => Ok(None),
+        }
+    }
+
+    /// The client updates `cache_index` first and fetches the archives it names
+    /// later, lazily. Until then a row holds whatever it had before, often an
+    /// empty placeholder, so any row whose version differs from the index is
+    /// not the current file and must not be decoded as if it were.
+    fn check_current(&self, minor: u32, stored: Option<u32>) -> Result<()> {
+        let Some(entry) = self.index.get(minor as usize).and_then(|q| q.as_ref()) else {
+            return Ok(());
+        };
+        match stored {
+            Some(version) if version == entry.version => Ok(()),
+            Some(version) => bail!(
+                "archive {} is out of date in this cache (stored version {}, index wants {}); \
+                 the game client has not downloaded it since the last update",
+                minor,
+                version,
+                entry.version
+            ),
+            None => bail!(
+                "archive {} is listed in the index but not downloaded to this cache yet",
+                minor
+            ),
         }
     }
 
@@ -55,13 +80,15 @@ impl CacheTable {
             return Ok(());
         }
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT KEY, DATA FROM cache")?;
+        let mut stmt = conn.prepare("SELECT KEY, DATA, VERSION FROM cache")?;
         let mut rows = stmt.query([])?;
-        let mut blobs: Vec<Option<Box<[u8]>>> = Vec::new();
+        let mut blobs: Vec<Option<(Box<[u8]>, u32)>> = Vec::new();
         let mut unreadable = Vec::new();
         while let Some(row) = rows.next()? {
             let key: i64 = row.get(0)?;
-            let (Ok(ukey), Ok(data)) = (usize::try_from(key), row.get::<_, Vec<u8>>(1)) else {
+            let (Ok(ukey), Ok(data), Ok(version)) =
+                (usize::try_from(key), row.get::<_, Vec<u8>>(1), row.get::<_, i64>(2))
+            else {
                 unreadable.push(key);
                 continue;
             };
@@ -69,7 +96,7 @@ impl CacheTable {
             if blobs.len() <= key {
                 blobs.resize(key + 1, None);
             }
-            blobs[key] = Some(data.into_boxed_slice());
+            blobs[key] = Some((data.into_boxed_slice(), version as u32));
         }
         let _ = self.preloaded.set(Preloaded { blobs, unreadable });
         Ok(())
@@ -78,14 +105,26 @@ impl CacheTable {
     pub fn file(&self, minor: u32) -> Result<Option<Vec<u8>>> {
         if let Some(pre) = self.preloaded.get() {
             match pre.blobs.get(minor as usize) {
-                Some(Some(raw)) => return Ok(Some(decompress(raw)?)),
-                _ if !pre.unreadable.contains(&(minor as i64)) => return Ok(None),
+                Some(Some((raw, version))) => {
+                    self.check_current(minor, Some(*version))?;
+                    return Ok(Some(decompress(raw)?));
+                }
+                _ if !pre.unreadable.contains(&(minor as i64)) => {
+                    self.check_current(minor, None)?;
+                    return Ok(None);
+                }
                 _ => {}
             }
         }
         match self.raw(minor)? {
-            Some(raw) => Ok(Some(decompress(&raw)?)),
-            None => Ok(None),
+            Some((raw, version)) => {
+                self.check_current(minor, Some(version))?;
+                Ok(Some(decompress(&raw)?))
+            }
+            None => {
+                self.check_current(minor, None)?;
+                Ok(None)
+            }
         }
     }
 
@@ -145,9 +184,43 @@ impl CacheSource {
         let indexfile = decompress(&raw)?;
         let index = parse_index(&indexfile)
             .with_context(|| format!("parsing cache_index of {}", dbfile.display()))?;
+        warn_if_outdated(&conn, &index, &dbfile)?;
 
         Ok(CacheTable { conn: Mutex::new(conn), index, preloaded: OnceLock::new() })
     }
+}
+
+/// One up-front line when the client has only partly applied an update, so a
+/// run against such a cache says why instead of just failing square by square.
+fn warn_if_outdated(conn: &Connection, index: &[Option<CacheIndex>], dbfile: &Path) -> Result<()> {
+    let mut stored: HashMap<u32, u32> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT KEY, VERSION FROM cache")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if let (Ok(key), Ok(version)) = (row.get::<_, i64>(0), row.get::<_, i64>(1)) {
+            stored.insert(key as u32, version as u32);
+        }
+    }
+    let (mut stale, mut missing) = (0, 0);
+    for entry in index.iter().flatten() {
+        match stored.get(&entry.minor) {
+            Some(&version) if version == entry.version => {}
+            Some(_) => stale += 1,
+            None => missing += 1,
+        }
+    }
+    if stale + missing > 0 {
+        eprintln!(
+            "warning: {} is only partly updated: {} archives out of date, {} not downloaded, \
+             of {} in its index. Those will fail to load; let the game client finish \
+             downloading, or point --cache at an up to date cache.",
+            dbfile.display(),
+            stale,
+            missing,
+            index.iter().flatten().count()
+        );
+    }
+    Ok(())
 }
 
 /// Reads a cache file front to back once so the page cache holds it before the
