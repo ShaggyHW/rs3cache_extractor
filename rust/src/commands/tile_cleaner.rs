@@ -821,7 +821,7 @@ fn get_range_transitions(conn: &Connection, table: &str) -> Result<TileMap<Vec<T
 }
 
 /// The centre of each node's destination range, for node tables that only carry
-/// `dest_*` (item, interface slot and POA teleports).
+/// `dest_*` (item, interface slot, POA and spell teleports).
 fn get_dest_tiles(conn: &Connection, table: &str) -> Result<Vec<Tile>> {
     let mut out: Vec<Tile> = Vec::new();
     let mut stmt = conn.prepare(&format!(
@@ -857,6 +857,7 @@ struct Teleports {
     item_dests: Vec<Tile>,
     ifslot: Vec<Tile>,
     poa_dests: Vec<Tile>,
+    spell_dests: Vec<Tile>,
 }
 
 fn load_teleports(conn: &Connection) -> Result<Teleports> {
@@ -874,7 +875,13 @@ fn load_teleports(conn: &Connection) -> Result<Teleports> {
     let item_dests = get_dest_tiles(conn, "teleports_item_nodes")?;
     let ifslot = get_dest_tiles(conn, "teleports_ifslot_nodes")?;
     let poa_dests = get_dest_tiles(conn, "teleports_POA_nodes")?;
-    Ok(Teleports { door, lode_set, lodestones, obj, npc, useon, item_dests, ifslot, poa_dests })
+    // Spell nodes were added after some databases were built; see use-on above.
+    let spell_dests = if table_exists(conn, "teleports_spell_nodes")? {
+        get_dest_tiles(conn, "teleports_spell_nodes")?
+    } else {
+        Vec::new()
+    };
+    Ok(Teleports { door, lode_set, lodestones, obj, npc, useon, item_dests, ifslot, poa_dests, spell_dests })
 }
 
 // ---------------------------------------------------------------------------
@@ -939,10 +946,11 @@ fn reachable_tiles(
         .chain(overrides.iter().filter(|(_, ov)| ov.force_mask.is_some()).map(|(&t, _)| t))
         .chain(tp.item_dests.iter().copied())
         .chain(tp.poa_dests.iter().copied())
-        // Interface slot teleports work from anywhere, so they are linked from the
-        // first expanded tile; the start tile is always queued, so that is the same
-        // as seeding them.
-        .chain(tp.ifslot.iter().copied());
+        // Interface slot and spell teleports work from anywhere, so they are linked
+        // from the first expanded tile; the start tile is always queued, so that is
+        // the same as seeding them.
+        .chain(tp.ifslot.iter().copied())
+        .chain(tp.spell_dests.iter().copied());
     for t in seeds {
         enqueue(t, &mut vis, &mut q);
     }
@@ -1368,7 +1376,7 @@ pub fn run_cleaner(src: &Connection, masks: &MaskStore, out_db: &Path, start: Ti
     let (useon_o, useon_d) = links(&tp.useon);
     println!(
         "Loaded teleports in {:.0} ms: door {}/{}, object {}/{}, npc {}/{}, use-on {}/{} (origins/destinations); \
-         {} lodestones, {} item, {} interface slot, {} POA destinations; {} fairy ring tiles",
+         {} lodestones, {} item, {} interface slot, {} POA, {} spell destinations; {} fairy ring tiles",
         t.elapsed().as_secs_f64() * 1e3,
         door_o,
         door_d,
@@ -1382,6 +1390,7 @@ pub fn run_cleaner(src: &Connection, masks: &MaskStore, out_db: &Path, start: Ti
         tp.item_dests.len(),
         tp.ifslot.len(),
         tp.poa_dests.len(),
+        tp.spell_dests.len(),
         overrides.values().filter(|o| o.force_mask.is_some()).count(),
     );
 
@@ -1536,6 +1545,7 @@ mod tests {
             (-4, 3, 0, i(1), formula(-4, 3)),
             (400, 400, 0, i(0), Value::Text("r400".into())),
             (9000, 5, 1, i(0), formula(9000, 5)),
+            (7000, 7000, 0, i(0), formula(7000, 7000)), // spell destination
             (50, 50, 5, i(0), formula(50, 50)),
             (1000, 1000, 0, i(255), formula(1000, 1000)), // isolated
         ]
@@ -1544,7 +1554,7 @@ mod tests {
     /// Rows (x, y, plane, walk_mask, last column) the cleaner must write for the
     /// scenario started at (10, 10, 0).
     fn scenario_expected(last: impl Fn(i32, i32) -> Value) -> Vec<Vec<Value>> {
-        let rows: [(i32, i32, i32, i64); 14] = [
+        let rows: [(i32, i32, i32, i64); 15] = [
             (-5, 3, 0, 4),
             (-4, 3, 0, 1),
             (10, 10, 0, 4),
@@ -1558,6 +1568,7 @@ mod tests {
             (202, 300, 0, 1),
             (202, 301, 0, 0),
             (400, 400, 0, 0),
+            (7000, 7000, 0, 0),
             (9000, 5, 1, 0),
         ];
         rows.iter()
@@ -1613,6 +1624,8 @@ mod tests {
              -- no origin: skipped, so (1000, 1000, 0) stays unreachable
              INSERT INTO teleports_useOn_nodes (id, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane)
                  VALUES (1, 1000, 1000, 1000, 1000, 0);
+             INSERT INTO teleports_spell_nodes (id, spell_id, dest_min_x, dest_max_x, dest_min_y, dest_max_y, dest_plane)
+                 VALUES (1, 57, 6999, 7001, 7000, 7000, 0);
              INSERT INTO teleports_requirements (id, metaInfo, key, value, comparison)
                  VALUES (1, 'm', 'k', 2.5, '>=');",
         )
@@ -1665,6 +1678,8 @@ mod tests {
             ("index", "idx_tpoa_req"),
             ("table", "teleports_useOn_nodes"),
             ("index", "idx_tuseon_req"),
+            ("table", "teleports_spell_nodes"),
+            ("index", "idx_tspell_req"),
             ("table", "teleports_requirements"),
             ("index", "idx_teleport_req_all"),
             ("view", "teleports_all"),
@@ -1800,7 +1815,7 @@ mod tests {
         let by_index: i64 = out
             .query_row("SELECT count(*) FROM tiles INDEXED BY idx_tiles_mask WHERE walk_mask = 0", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(by_index, 5);
+        assert_eq!(by_index, 6);
         assert_rest_copied(&src_path, &out);
     }
 
