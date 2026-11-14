@@ -261,6 +261,7 @@ CREATE TABLE teleports_useOn_nodes (
 CREATE TABLE teleports_spell_nodes (
     id INTEGER PRIMARY KEY,
     spell_id INTEGER,
+    action TEXT,
     dest_min_x INTEGER,
     dest_max_x INTEGER,
     dest_min_y INTEGER,
